@@ -10,7 +10,7 @@
 // Tensorrt requires a logger implementation to get runtime data
 class TrtLogger : public nvinfer1::ILogger {
 public:
-  void log(Severity severity, const char *message) noexcept override;
+  void log(Severity severity, const char* message) noexcept override;
 };
 
 struct TensorInfo {
