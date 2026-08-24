@@ -22,10 +22,10 @@ inline size_t dTypeSize(nvinfer1::DataType type) {
 
 // Returns element count of a tensor shape.
 // Dims = [1, 3, 640, 640] -> 1 * 3 * 640 * 640
-inline size_t volume(const nvinfer1::Dims& dimensions) {
-    size_t volume = 1;
-    for (int i = 0; i < dimensions.nbDims; i++) {
-        volume *= static_cast<size_t>(dimensions.d[i]);
-    }
-    return volume;
+inline size_t volume(const nvinfer1::Dims &dimensions) {
+  size_t volume = 1;
+  for (int i = 0; i < dimensions.nbDims; i++) {
+    volume *= static_cast<size_t>(dimensions.d[i]);
+  }
+  return volume;
 }
