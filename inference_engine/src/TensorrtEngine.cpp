@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 
 // TrtLogger implementation
 void TrtLogger::log(Severity severity, const char *message) noexcept {
@@ -83,4 +84,36 @@ void TensorrtEngine::allocateBuffers() {
     }
     std::cout << "] bytes=" << bytes << std::endl;
   }
+}
+
+std::vector<std::vector<float>>
+TensorrtEngine::infer(const std::vector<float> &inputData) {
+  for (size_t i = 0; i < tensorInfos_.size(); ++i) {
+    if (!tensorInfos_[i].isInput)
+      continue;
+    const size_t expectedFloats = tensorInfos_[i].sizeBytes / sizeof(float);
+    if (inputData.size() != expectedFloats) {
+      throw std::runtime_error(
+          "Input size mismatch: expected " + std::to_string(expectedFloats) +
+          " floats, got " + std::to_string(inputData.size()));
+    }
+    cudaMemcpyAsync(deviceBuffers_[i], inputData.data(),
+                    tensorInfos_[i].sizeBytes, cudaMemcpyHostToDevice, stream_);
+  }
+  if (!context_->enqueueV3(stream_)) {
+    throw std::runtime_error("Inference execution (enqueueV3) failed");
+  }
+  std::vector<std::vector<float>> outputs;
+  for (size_t i = 0; i < tensorInfos_.size(); ++i) {
+    if (tensorInfos_[i].isInput)
+      continue;
+
+    const size_t numFloats = tensorInfos_[i].sizeBytes / sizeof(float);
+    std::vector<float> hostOut(numFloats);
+    cudaMemcpyAsync(hostOut.data(), deviceBuffers_[i],
+                    tensorInfos_[i].sizeBytes, cudaMemcpyDeviceToHost, stream_);
+    outputs.push_back(std::move(hostOut));
+  }
+  cudaStreamSynchronize(stream_);
+  return outputs;
 }
