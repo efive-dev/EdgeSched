@@ -2,17 +2,23 @@ syntax = "proto3";
 
 package edgesched;
 
+// Required for Go codegen (protoc-gen-go)
+option go_package = "edgesched/scheduler/generated";
+
+// One inference engine (e.g. yolo26n_int8, yolo26m_fp16) exposes this
+// service over its own gRPC port. The Go scheduler talks to each engine
+// process independently.
 service Inference {
   rpc Predict(PredictRequest) returns (PredictResponse);
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
 }
 
 message PredictRequest {
-  bytes image_data = 1;
+  bytes image_data = 1; // raw image bytes (e.g. JPEG/PNG), decoded server side
 }
 
 message Detection {
-  float x1 = 1;
+  float x1 = 1; // bounding box, original image pixel coordinates
   float y1 = 2;
   float x2 = 3;
   float y2 = 4;
