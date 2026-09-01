@@ -11,14 +11,20 @@ import (
 	"time"
 
 	"edgesched/scheduler/internal/engineclient"
+	"edgesched/scheduler/internal/workerpool"
 )
 
 type Server struct {
-	engines map[string]*engineclient.Client
+	// clients is used for HealthCheck, which bypasses the worker pool
+	// there's no need to bound concurrency or queue a health check.
+	clients map[string]*engineclient.Client
+	// pools is used for Predict, every inference request goes through
+	// its engine's bounded pool, not directly through the client.
+	pools map[string]*workerpool.Pool
 }
 
-func NewServer(engines map[string]*engineclient.Client) *Server {
-	return &Server{engines: engines}
+func NewServer(clients map[string]*engineclient.Client, pools map[string]*workerpool.Pool) *Server {
+	return &Server{clients: clients, pools: pools}
 }
 
 type detectionJSON struct {
@@ -37,6 +43,7 @@ type predictResponseJSON struct {
 	PreprocessMs  float32         `json:"preprocess_ms"`
 	InferenceMs   float32         `json:"inference_ms"`
 	PostprocessMs float32         `json:"postprocess_ms"`
+	QueueDepth    int             `json:"queue_depth_at_submit"`
 }
 
 const maxImageBytes = 20 << 20 // 20MB
@@ -49,7 +56,7 @@ func (s *Server) HandlePredict(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing required query param: engine", http.StatusBadRequest)
 		return
 	}
-	client, ok := s.engines[engineName]
+	pool, ok := s.pools[engineName]
 	if !ok {
 		http.Error(w, fmt.Sprintf("unknown engine: %q", engineName), http.StatusBadRequest)
 		return
@@ -63,32 +70,50 @@ func (s *Server) HandlePredict(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "empty request body -- expected raw image bytes", http.StatusBadRequest)
 		return
 	}
-	// TODO: implement actual scheduler behaviour
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	resp, err := client.Predict(ctx, imageData)
-	if err != nil {
-		log.Printf("predict failed on engine %q: %v", engineName, err)
-		http.Error(w, "inference failed: "+err.Error(), http.StatusInternalServerError)
+	queueDepthAtSubmit := pool.QueueDepth()
+	resultCh := make(chan workerpool.Result, 1)
+	if !pool.Submit(workerpool.Request{Ctx: ctx, ImageData: imageData, Result: resultCh}) {
+		// Admission control: the queue is already full. Reject now rather
+		// than let this request wait behind an already saturated engine
+		// with no bound on how long that wait could be
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, fmt.Sprintf("engine %q is overloaded (queue full), try again shortly", engineName),
+			http.StatusServiceUnavailable)
 		return
 	}
-	out := predictResponseJSON{
-		Engine:        engineName,
-		PreprocessMs:  resp.GetPreprocessMs(),
-		InferenceMs:   resp.GetInferenceMs(),
-		PostprocessMs: resp.GetPostprocessMs(),
-	}
-	for _, d := range resp.GetDetections() {
-		out.Detections = append(out.Detections, detectionJSON{
-			X1: d.GetX1(), Y1: d.GetY1(), X2: d.GetX2(), Y2: d.GetY2(),
-			Confidence: d.GetConfidence(),
-			ClassID:    d.GetClassId(),
-			ClassName:  d.GetClassName(),
-		})
-	}
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(out); err != nil {
-		log.Printf("failed to encode response: %v", err)
+	select {
+	case result := <-resultCh:
+		if result.Err != nil {
+			log.Printf("predict failed on engine %q: %v", engineName, result.Err)
+			http.Error(w, "inference failed: "+result.Err.Error(), http.StatusInternalServerError)
+			return
+		}
+		resp := result.Response
+		out := predictResponseJSON{
+			Engine:        engineName,
+			PreprocessMs:  resp.GetPreprocessMs(),
+			InferenceMs:   resp.GetInferenceMs(),
+			PostprocessMs: resp.GetPostprocessMs(),
+			QueueDepth:    queueDepthAtSubmit,
+		}
+		for _, d := range resp.GetDetections() {
+			out.Detections = append(out.Detections, detectionJSON{
+				X1: d.GetX1(), Y1: d.GetY1(), X2: d.GetX2(), Y2: d.GetY2(),
+				Confidence: d.GetConfidence(),
+				ClassID:    d.GetClassId(),
+				ClassName:  d.GetClassName(),
+			})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(out); err != nil {
+			log.Printf("failed to encode response: %v", err)
+		}
+	case <-ctx.Done():
+		// Either the request timed out waiting in queue, or the client
+		// disconnected
+		http.Error(w, "request timed out waiting for inference", http.StatusGatewayTimeout)
 	}
 }
 
@@ -100,7 +125,7 @@ func (s *Server) HandleHealth(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing required query param: engine", http.StatusBadRequest)
 		return
 	}
-	client, ok := s.engines[engineName]
+	client, ok := s.clients[engineName]
 	if !ok {
 		http.Error(w, fmt.Sprintf("unknown engine: %q", engineName), http.StatusBadRequest)
 		return
