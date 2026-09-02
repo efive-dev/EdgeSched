@@ -4,14 +4,18 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"edgesched/scheduler/internal/api"
 	"edgesched/scheduler/internal/engineclient"
+	"edgesched/scheduler/internal/routing"
+	"edgesched/scheduler/internal/sysmonitor"
 	"edgesched/scheduler/internal/workerpool"
 )
 
@@ -35,6 +39,29 @@ func parseEngines(spec string) (map[string]string, error) {
 	return result, nil
 }
 
+func buildPolicy(policyName, cheapTierSpec string, tempThreshold float64, cheapTierCount int) (routing.Policy, error) {
+	switch policyName {
+	case "least-queue":
+		return &routing.LeastQueuePolicy{}, nil
+	case "thermal-aware":
+		if cheapTierSpec == "" {
+			return nil, fmt.Errorf("-routing-policy=thermal-aware requires -cheap-tier")
+		}
+		tiers := strings.Split(cheapTierSpec, ",")
+		for i := range tiers {
+			tiers[i] = strings.TrimSpace(tiers[i])
+		}
+		return &routing.ThermalAwarePolicy{
+			Tiers:          tiers,
+			TempThresholdC: tempThreshold,
+			CheapTierCount: cheapTierCount,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unknown -routing-policy: %q (want %q or %q)",
+			policyName, "least-queue", "thermal-aware")
+	}
+}
+
 func main() {
 	enginesFlag := flag.String("engines", "",
 		`comma-separated name=address pairs, e.g. "yolo26n_int8=localhost:50051,yolo26m_fp16=localhost:50052"`)
@@ -43,6 +70,17 @@ func main() {
 		"max requests allowed to wait per engine before Submit starts rejecting (503)")
 	concurrency := flag.Int("concurrency", 4,
 		"max concurrent Predict calls per engine (workers per pool)")
+
+	policyName := flag.String("routing-policy", "least-queue",
+		`routing policy when "engine" query param is omitted: "least-queue" or "thermal-aware"`)
+	cheapTierFlag := flag.String("cheap-tier", "",
+		"comma-separated engine names, cheapest first (required for -routing-policy=thermal-aware)")
+	tempThreshold := flag.Float64("temp-threshold-c", 60.0,
+		"MaxTempC at/above which thermal-aware policy restricts to the cheap tier")
+	cheapTierCount := flag.Int("cheap-tier-count", 1,
+		"how many of the leading cheap-tier engines stay eligible when hot")
+	maxLatencyBudgetMs := flag.Int64("max-latency-budget-ms", 30000,
+		"upper bound on any client-requested latency_budget_ms")
 	flag.Parse()
 	if *enginesFlag == "" {
 		log.Fatal("must specify -engines")
@@ -51,6 +89,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("bad -engines flag: %v", err)
 	}
+	policy, err := buildPolicy(*policyName, *cheapTierFlag, *tempThreshold, *cheapTierCount)
+	if err != nil {
+		log.Fatalf("bad routing policy configuration: %v", err)
+	}
+	log.Printf("using routing policy: %s", *policyName)
 	clients := make(map[string]*engineclient.Client)
 	pools := make(map[string]*workerpool.Pool)
 	for name, addr := range engineAddrs {
@@ -63,7 +106,13 @@ func main() {
 		log.Printf("registered engine %q -> %s (queue=%d, concurrency=%d)",
 			name, addr, *queueSize, *concurrency)
 	}
-	server := api.NewServer(clients, pools)
+	monitor := sysmonitor.New()
+	go func() {
+		if err := monitor.Run(context.Background()); err != nil {
+			log.Printf("sysmonitor error: %v", err)
+		}
+	}()
+	server := api.NewServer(clients, pools, monitor, policy, time.Duration(*maxLatencyBudgetMs)*time.Millisecond)
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /predict", server.HandlePredict)
 	mux.HandleFunc("GET /health", server.HandleHealth)
