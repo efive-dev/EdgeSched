@@ -8,23 +8,42 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"edgesched/scheduler/internal/engineclient"
+	"edgesched/scheduler/internal/routing"
+	"edgesched/scheduler/internal/sysmonitor"
 	"edgesched/scheduler/internal/workerpool"
 )
 
+const defaultLatencyBudget = 10 * time.Second
+
 type Server struct {
-	// clients is used for HealthCheck, which bypasses the worker pool
-	// there's no need to bound concurrency or queue a health check.
 	clients map[string]*engineclient.Client
-	// pools is used for Predict, every inference request goes through
-	// its engine's bounded pool, not directly through the client.
-	pools map[string]*workerpool.Pool
+	pools   map[string]*workerpool.Pool
+	monitor *sysmonitor.Monitor
+	policy  routing.Policy
+	// maxLatencyBudget caps whatever a client requests via
+	// latency_budget_ms, so no single request can hold a worker/queue
+	// slot indefinitely
+	maxLatencyBudget time.Duration
 }
 
-func NewServer(clients map[string]*engineclient.Client, pools map[string]*workerpool.Pool) *Server {
-	return &Server{clients: clients, pools: pools}
+func NewServer(
+	clients map[string]*engineclient.Client,
+	pools map[string]*workerpool.Pool,
+	monitor *sysmonitor.Monitor,
+	policy routing.Policy,
+	maxLatencyBudget time.Duration,
+) *Server {
+	return &Server{
+		clients:          clients,
+		pools:            pools,
+		monitor:          monitor,
+		policy:           policy,
+		maxLatencyBudget: maxLatencyBudget,
+	}
 }
 
 type detectionJSON struct {
@@ -38,23 +57,65 @@ type detectionJSON struct {
 }
 
 type predictResponseJSON struct {
-	Engine        string          `json:"engine"`
-	Detections    []detectionJSON `json:"detections"`
-	PreprocessMs  float32         `json:"preprocess_ms"`
-	InferenceMs   float32         `json:"inference_ms"`
-	PostprocessMs float32         `json:"postprocess_ms"`
-	QueueDepth    int             `json:"queue_depth_at_submit"`
+	Engine          string          `json:"engine"`
+	Detections      []detectionJSON `json:"detections"`
+	PreprocessMs    float32         `json:"preprocess_ms"`
+	InferenceMs     float32         `json:"inference_ms"`
+	PostprocessMs   float32         `json:"postprocess_ms"`
+	QueueDepth      int             `json:"queue_depth_at_submit"`
+	AutoRouted      bool            `json:"auto_routed"`
+	LatencyBudgetMs int64           `json:"latency_budget_ms"`
 }
 
 const maxImageBytes = 20 << 20 // 20MB
 
-// HandlePredict handles POST /predict?engine=<name>, with the raw image
-// bytes as the request body
+// parseLatencyBudget reads latency_budget_ms from the query string
+func parseLatencyBudget(r *http.Request, maxBudget time.Duration) (time.Duration, error) {
+	raw := r.URL.Query().Get("latency_budget_ms")
+	if raw == "" {
+		return defaultLatencyBudget, nil
+	}
+	ms, err := strconv.Atoi(raw)
+	if err != nil || ms <= 0 {
+		return 0, fmt.Errorf("invalid latency_budget_ms: %q (must be a positive integer)", raw)
+	}
+	budget := min(time.Duration(ms)*time.Millisecond, maxBudget)
+	return budget, nil
+}
+
+// engineStates snapshots current queue depth across every configured
+// engine, for the routing policy to choose from
+func (s *Server) engineStates() []routing.EngineState {
+	states := make([]routing.EngineState, 0, len(s.pools))
+	for name, pool := range s.pools {
+		states = append(states, routing.EngineState{Name: name, QueueDepth: pool.QueueDepth()})
+	}
+	return states
+}
+
+// HandlePredict handles POST /predict, optionally with ?engine=<name>
+// (manual override) and/or ?latency_budget_ms=<n> (client-specified
+// deadline, also passed to the routing policy)
 func (s *Server) HandlePredict(w http.ResponseWriter, r *http.Request) {
-	engineName := r.URL.Query().Get("engine")
-	if engineName == "" {
-		http.Error(w, "missing required query param: engine", http.StatusBadRequest)
+	budget, err := parseLatencyBudget(r, s.maxLatencyBudget)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), budget)
+	defer cancel()
+	engineName := r.URL.Query().Get("engine")
+	autoRouted := false
+	if engineName == "" {
+		autoRouted = true
+		sysState := s.monitor.Current()
+		routingReq := routing.Request{LatencyBudget: budget}
+		selected, err := s.policy.SelectEngine(routingReq, sysState, s.engineStates())
+		if err != nil {
+			http.Error(w, "routing failed: "+err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		engineName = selected
 	}
 	pool, ok := s.pools[engineName]
 	if !ok {
@@ -70,8 +131,6 @@ func (s *Server) HandlePredict(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "empty request body -- expected raw image bytes", http.StatusBadRequest)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
 	queueDepthAtSubmit := pool.QueueDepth()
 	resultCh := make(chan workerpool.Result, 1)
 	if !pool.Submit(workerpool.Request{Ctx: ctx, ImageData: imageData, Result: resultCh}) {
@@ -92,11 +151,13 @@ func (s *Server) HandlePredict(w http.ResponseWriter, r *http.Request) {
 		}
 		resp := result.Response
 		out := predictResponseJSON{
-			Engine:        engineName,
-			PreprocessMs:  resp.GetPreprocessMs(),
-			InferenceMs:   resp.GetInferenceMs(),
-			PostprocessMs: resp.GetPostprocessMs(),
-			QueueDepth:    queueDepthAtSubmit,
+			Engine:          engineName,
+			PreprocessMs:    resp.GetPreprocessMs(),
+			InferenceMs:     resp.GetInferenceMs(),
+			PostprocessMs:   resp.GetPostprocessMs(),
+			QueueDepth:      queueDepthAtSubmit,
+			AutoRouted:      autoRouted,
+			LatencyBudgetMs: budget.Milliseconds(),
 		}
 		for _, d := range resp.GetDetections() {
 			out.Detections = append(out.Detections, detectionJSON{
@@ -111,9 +172,10 @@ func (s *Server) HandlePredict(w http.ResponseWriter, r *http.Request) {
 			log.Printf("failed to encode response: %v", err)
 		}
 	case <-ctx.Done():
-		// Either the request timed out waiting in queue, or the client
-		// disconnected
-		http.Error(w, "request timed out waiting for inference", http.StatusGatewayTimeout)
+		// Either the client's budget expired while queued/in-flight, or
+		// the underlying HTTP request was canceled
+		http.Error(w, "request timed out waiting for inference (latency budget exceeded)",
+			http.StatusGatewayTimeout)
 	}
 }
 
