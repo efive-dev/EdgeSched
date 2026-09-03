@@ -8,15 +8,20 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
 	"edgesched/scheduler/internal/api"
 	"edgesched/scheduler/internal/engineclient"
+	"edgesched/scheduler/internal/metrics"
 	"edgesched/scheduler/internal/routing"
 	"edgesched/scheduler/internal/sysmonitor"
 	"edgesched/scheduler/internal/workerpool"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // parseEngines parses "name1=addr1,name2=addr2" into a map.
@@ -93,7 +98,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("bad routing policy configuration: %v", err)
 	}
-	log.Printf("using routing policy: %s", *policyName)
+	slog.Info("using routing policy", "policy", *policyName)
+
 	clients := make(map[string]*engineclient.Client)
 	pools := make(map[string]*workerpool.Pool)
 	for name, addr := range engineAddrs {
@@ -103,20 +109,27 @@ func main() {
 		}
 		clients[name] = client
 		pools[name] = workerpool.New(client, *queueSize, *concurrency)
-		log.Printf("registered engine %q -> %s (queue=%d, concurrency=%d)",
-			name, addr, *queueSize, *concurrency)
+		slog.Info("registered engine", "name", name, "addr", addr,
+			"queue_size", *queueSize, "concurrency", *concurrency)
 	}
 	monitor := sysmonitor.New()
 	go func() {
+		// Runs for the lifetime of the process; no graceful shutdown
+		// wired up yet, so context.Background() is intentional here
 		if err := monitor.Run(context.Background()); err != nil {
-			log.Printf("sysmonitor error: %v", err)
+			slog.Error("sysmonitor stopped", "error", err)
 		}
 	}()
-	server := api.NewServer(clients, pools, monitor, policy, time.Duration(*maxLatencyBudgetMs)*time.Millisecond)
+	metricsRegistry := metrics.New(pools, monitor)
+	metricsRegistry.MustRegister(prometheus.DefaultRegisterer)
+	server := api.NewServer(clients, pools, monitor, policy,
+		time.Duration(*maxLatencyBudgetMs)*time.Millisecond, metricsRegistry)
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /predict", server.HandlePredict)
 	mux.HandleFunc("GET /health", server.HandleHealth)
-	log.Printf("scheduler listening on %s", *listenAddr)
+	mux.Handle("GET /metrics", promhttp.Handler())
+
+	slog.Info("scheduler listening", "addr", *listenAddr)
 	if err := http.ListenAndServe(*listenAddr, mux); err != nil {
 		log.Fatal(err)
 	}
