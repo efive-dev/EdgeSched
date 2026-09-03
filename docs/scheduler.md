@@ -21,6 +21,7 @@ The Go control plane is the client-facing side of EdgeSched, it connects to one 
 | **`internal/sysmonitor.Monitor`** | Polls `tegrastats`/`nvpmodel` in the background, exposes the latest system state (thermal, power, memory, GPU utilization) via a lock free atomic snapshot. |
 | **`cmd/sysmonitor_debug`** | Standalone tool to validate `sysmonitor`'s parsing against real device output before trusting it anywhere else. |
 | **`internal/routing.Policy`** | Selects which engine handles a request. `LeastQueuePolicy` (pure load balancing) and `ThermalAwarePolicy` (restricts to a cheap tier once hot) implement it. |
+| **`internal/metrics.Registry`** | Prometheus metrics: imperative counters/histograms for requests and routing, pull-based gauges for queue depth and system state. |
 
 ---
 
