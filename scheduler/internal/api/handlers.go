@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -21,14 +22,12 @@ import (
 const defaultLatencyBudget = 10 * time.Second
 
 type Server struct {
-	clients map[string]*engineclient.Client
-	pools   map[string]*workerpool.Pool
-	monitor *sysmonitor.Monitor
-	policy  routing.Policy
-	metrics *metrics.Registry
-	// maxLatencyBudget caps whatever a client requests via
-	// latency_budget_ms, so no single request can hold a worker/queue
-	// slot indefinitely
+	clients          map[string]*engineclient.Client
+	pools            map[string]*workerpool.Pool
+	monitor          *sysmonitor.Monitor
+	policy           routing.Policy
+	policyName       string
+	metrics          *metrics.Registry
 	maxLatencyBudget time.Duration
 }
 
@@ -37,6 +36,7 @@ func NewServer(
 	pools map[string]*workerpool.Pool,
 	monitor *sysmonitor.Monitor,
 	policy routing.Policy,
+	policyName string,
 	maxLatencyBudget time.Duration,
 	metricsRegistry *metrics.Registry,
 ) *Server {
@@ -45,6 +45,7 @@ func NewServer(
 		pools:            pools,
 		monitor:          monitor,
 		policy:           policy,
+		policyName:       policyName,
 		metrics:          metricsRegistry,
 		maxLatencyBudget: maxLatencyBudget,
 	}
@@ -210,8 +211,6 @@ func (s *Server) HandlePredict(w http.ResponseWriter, r *http.Request) {
 			slog.Error("failed to encode response", "error", err)
 		}
 	case <-ctx.Done():
-	// Either the client's budget expired while queued/in-flight, or
-		// the underlying HTTP request was canceled
 		status = "timeout"
 		http.Error(w, "request timed out waiting for inference (latency budget exceeded)",
 			http.StatusGatewayTimeout)
@@ -233,7 +232,6 @@ func (s *Server) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
-
 	resp, err := client.HealthCheck(ctx)
 	if err != nil {
 		http.Error(w, "health check failed: "+err.Error(), http.StatusServiceUnavailable)
@@ -251,4 +249,53 @@ func boolLabel(b bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+type engineStatusJSON struct {
+	Name       string `json:"name"`
+	QueueDepth int    `json:"queue_depth"`
+}
+
+type systemStatusJSON struct {
+	Valid      bool    `json:"valid"`
+	MaxTempC   float64 `json:"max_temp_c"`
+	PowerMW    float64 `json:"power_mw"`
+	GPUUtilPct float64 `json:"gpu_util_pct"`
+	RAMUsedMB  int     `json:"ram_used_mb"`
+	RAMTotalMB int     `json:"ram_total_mb"`
+	PowerMode  string  `json:"power_mode"`
+}
+
+type statusJSON struct {
+	Policy  string             `json:"policy"`
+	Engines []engineStatusJSON `json:"engines"`
+	System  systemStatusJSON   `json:"system"`
+}
+
+// HandleStatus handles GET /status  a lightweight JSON snapshot of
+// live queue/system state, purpose-built for the dashboard (web/) to
+// poll
+func (s *Server) HandleStatus(w http.ResponseWriter, r *http.Request) {
+	rawStates := s.engineStates()
+	sort.Slice(rawStates, func(i, j int) bool { return rawStates[i].Name < rawStates[j].Name })
+	engines := make([]engineStatusJSON, 0, len(rawStates))
+	for _, es := range rawStates {
+		engines = append(engines, engineStatusJSON{Name: es.Name, QueueDepth: es.QueueDepth})
+	}
+	state := s.monitor.Current()
+	out := statusJSON{
+		Policy:  s.policyName,
+		Engines: engines,
+		System: systemStatusJSON{
+			Valid:      state.Valid,
+			MaxTempC:   state.MaxTempC,
+			PowerMW:    state.PowerMW,
+			GPUUtilPct: state.GPUUtilPct,
+			RAMUsedMB:  state.RAMUsedMB,
+			RAMTotalMB: state.RAMTotalMB,
+			PowerMode:  state.PowerMode,
+		},
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
 }

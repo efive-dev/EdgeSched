@@ -19,6 +19,7 @@ import (
 	"edgesched/scheduler/internal/routing"
 	"edgesched/scheduler/internal/sysmonitor"
 	"edgesched/scheduler/internal/workerpool"
+	"edgesched/scheduler/web"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -114,21 +115,20 @@ func main() {
 	}
 	monitor := sysmonitor.New()
 	go func() {
-		// Runs for the lifetime of the process; no graceful shutdown
-		// wired up yet, so context.Background() is intentional here
 		if err := monitor.Run(context.Background()); err != nil {
 			slog.Error("sysmonitor stopped", "error", err)
 		}
 	}()
 	metricsRegistry := metrics.New(pools, monitor)
 	metricsRegistry.MustRegister(prometheus.DefaultRegisterer)
-	server := api.NewServer(clients, pools, monitor, policy,
+	server := api.NewServer(clients, pools, monitor, policy, *policyName,
 		time.Duration(*maxLatencyBudgetMs)*time.Millisecond, metricsRegistry)
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /predict", server.HandlePredict)
 	mux.HandleFunc("GET /health", server.HandleHealth)
+	mux.HandleFunc("GET /status", server.HandleStatus)
 	mux.Handle("GET /metrics", promhttp.Handler())
-
+	mux.Handle("/", web.Handler())
 	slog.Info("scheduler listening", "addr", *listenAddr)
 	if err := http.ListenAndServe(*listenAddr, mux); err != nil {
 		log.Fatal(err)
