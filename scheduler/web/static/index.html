@@ -2,112 +2,275 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>EdgeSched Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="vendor/chart.umd.min.js"></script>
 <style>
   :root {
-    --bg: #0f1115;
-    --panel: #171a21;
-    --border: #2a2f3a;
-    --text: #e6e6e6;
-    --muted: #8a8f98;
-    --accent: #55aaff;
-    --danger: #ff5555;
-    --ok: #5cd68b;
+    --bg: #FFFFFF;
+    --fg: #000000;
+    --muted-bg: #F5F5F5;
+    --muted-fg: #525252;
+    --border: #000000;
+    --border-light: #E5E5E5;
+
+    --font-display: "Playfair Display", Georgia, serif;
+    --font-body: "Source Serif 4", Georgia, serif;
+    --font-mono: "JetBrains Mono", ui-monospace, monospace;
   }
+
   * { box-sizing: border-box; }
+
+  html, body { background: var(--bg); }
+
   body {
     margin: 0;
-    background: var(--bg);
-    color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    padding: 24px;
+    color: var(--fg);
+    font-family: var(--font-body);
+    position: relative;
   }
-  h1 { font-size: 20px; margin: 0 0 4px 0; }
-  .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+
+  /* Layered monochrome texture — global hairline pattern, kept extremely subtle */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background-image: repeating-linear-gradient(
+      0deg, transparent, transparent 1px, #000 1px, #000 2px
+    );
+    background-size: 100% 4px;
+    opacity: 0.015;
+  }
+
+  header, main { position: relative; z-index: 1; }
+
+  header {
+    padding: 40px 48px 32px;
+    border-bottom: 4px solid var(--border);
+  }
+
+  h1 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: clamp(2.25rem, 4.5vw, 3.5rem);
+    letter-spacing: -0.025em;
+    line-height: 1;
+    margin: 0 0 14px 0;
+  }
+
+  .subtitle {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted-fg);
+  }
+
+  .subtitle strong {
+    color: var(--fg);
+    font-weight: 600;
+  }
+
+  main {
+    padding: 40px 48px 56px;
+  }
+
   .grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 20px;
+    gap: 24px;
     align-items: start;
   }
+
   .panel {
-    background: var(--panel);
+    background: var(--bg);
     border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 16px 20px;
+    border-radius: 0;
+    padding: 28px 32px;
   }
+
   .panel h2 {
-    font-size: 13px;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--muted);
-    margin: 0 0 14px 0;
+    letter-spacing: 0.14em;
+    color: var(--muted-fg);
+    margin: 0 0 18px 0;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-light);
   }
+
   .stat-row {
     display: flex;
     justify-content: space-between;
-    align-items: center;
-    padding: 6px 0;
-    border-bottom: 1px solid var(--border);
-    font-size: 14px;
+    align-items: baseline;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--border-light);
+    font-size: 1rem;
   }
   .stat-row:last-child { border-bottom: none; }
-  .stat-val { font-variant-numeric: tabular-nums; font-weight: 600; }
-  .chart-wrap { position: relative; height: 160px; margin-top: 12px; }
+
+  .stat-val {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  .chart-wrap {
+    position: relative;
+    height: 170px;
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-light);
+  }
+
+  .engine-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--border-light);
+    font-size: 0.95rem;
+  }
+  .engine-row:last-child { border-bottom: none; }
+
+  .engine-name {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .engine-name .swatch {
+    width: 11px;
+    height: 11px;
+    flex-shrink: 0;
+    display: inline-block;
+  }
+
   select, input[type=number] {
     background: var(--bg);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 6px 8px;
-    font-size: 13px;
-  }
-  input[type=file] { font-size: 13px; color: var(--muted); }
-  button {
-    background: var(--accent);
-    color: #08111c;
+    color: var(--fg);
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
     border: none;
-    border-radius: 4px;
-    padding: 8px 16px;
-    font-weight: 600;
-    font-size: 13px;
-    cursor: pointer;
+    border-bottom: 2px solid var(--border);
+    border-radius: 0;
+    padding: 8px 4px;
+    outline: none;
+    transition: border-width 100ms;
   }
-  button:hover { opacity: 0.9; }
+  select:focus, input[type=number]:focus {
+    border-bottom-width: 4px;
+  }
+  input[type=number] { width: 220px; }
+  input[type=number]::placeholder { color: var(--muted-fg); font-style: italic; }
+
+  input[type=file] {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--muted-fg);
+  }
+  input[type=file]::file-selector-button {
+    background: var(--fg);
+    color: var(--bg);
+    border: none;
+    border-radius: 0;
+    padding: 8px 16px;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-right: 14px;
+    cursor: pointer;
+    transition: background-color 100ms, color 100ms;
+  }
+  input[type=file]::file-selector-button:hover {
+    background: var(--bg);
+    color: var(--fg);
+    box-shadow: inset 0 0 0 1px var(--border);
+  }
+
+  button {
+    background: var(--fg);
+    color: var(--bg);
+    border: 2px solid var(--fg);
+    border-radius: 0;
+    padding: 10px 28px;
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    cursor: pointer;
+    transition: background-color 100ms, color 100ms;
+  }
+  button:hover {
+    background: var(--bg);
+    color: var(--fg);
+  }
+  button:focus-visible,
+  select:focus-visible,
+  input:focus-visible {
+    outline: 3px solid var(--fg);
+    outline-offset: 3px;
+  }
+
   .predict-controls {
     display: flex;
-    gap: 10px;
+    gap: 20px;
     align-items: center;
     flex-wrap: wrap;
-    margin-bottom: 14px;
+    margin-bottom: 22px;
+    padding-bottom: 22px;
+    border-bottom: 1px solid var(--border-light);
   }
+
   #predictResult {
-    font-family: ui-monospace, monospace;
-    font-size: 12px;
-    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--muted-fg);
     white-space: pre-wrap;
-    margin-top: 10px;
-    line-height: 1.6;
+    margin-top: 18px;
+    line-height: 1.75;
   }
+
   #resultCanvas {
     max-width: 100%;
-    border-radius: 6px;
     border: 1px solid var(--border);
-    margin-top: 10px;
+    border-radius: 0;
+    margin-top: 18px;
     display: none;
   }
+
   .full-width { grid-column: 1 / -1; }
+
+  @media (max-width: 760px) {
+    header { padding: 28px 24px 24px; }
+    main { padding: 28px 24px 40px; }
+    .grid { grid-template-columns: 1fr; }
+    .panel { padding: 22px 20px; }
+    input[type=number] { width: 100%; }
+  }
 </style>
 </head>
 <body>
 
-<h1>EdgeSched Live Dashboard</h1>
-<div class="subtitle">
-  Routing policy: <strong id="policyName">—</strong> ·
-  polling <code>/status</code> every 1s
-</div>
+<header>
+  <h1>EdgeSched</h1>
+  <div class="subtitle">
+    Routing policy — <strong id="policyName">—</strong> · polling /status every 1s
+  </div>
+</header>
 
+<main>
 <div class="grid">
 
   <div class="panel">
@@ -131,7 +294,7 @@
     <div class="predict-controls">
       <input type="file" id="imageInput" accept="image/*">
       <select id="engineSelect"><option value="">(auto)</option></select>
-      <input type="number" id="budgetInput" placeholder="latency budget ms (optional)" style="width:220px">
+      <input type="number" id="budgetInput" placeholder="latency budget ms (optional)">
       <button onclick="sendPredict()">Predict</button>
     </div>
     <canvas id="resultCanvas"></canvas>
@@ -139,10 +302,23 @@
   </div>
 
 </div>
+</main>
 
 <script>
 const HISTORY_LEN = 60; // seconds of history retained (1 point/sec)
-const ENGINE_COLORS = ['#55aaff', '#5cd68b', '#ffb454', '#ff6b9d', '#c792ea'];
+
+const SERIES_COLORS = [
+  '#8B1A1A', // ink crimson
+  '#1B4B43', // deep teal
+  '#9C6B0B', // dark ochre
+  '#3B3562', // indigo
+  '#5C5F2D', // olive
+  '#7A3B69', // plum
+];
+
+function colorSwatchHtml(color) {
+  return '<span class="swatch" style="background:' + color + '"></span>';
+}
 
 function nowLabel() {
   const d = new Date();
@@ -157,12 +333,18 @@ function baseChartOptions(yLabel) {
     maintainAspectRatio: false,
     animation: false,
     scales: {
-      x: { ticks: { color: '#8a8f98', maxTicksLimit: 6 }, grid: { color: '#2a2f3a' } },
-      y: { ticks: { color: '#8a8f98' }, grid: { color: '#2a2f3a' },
-           title: { display: !!yLabel, text: yLabel, color: '#8a8f98' } }
+      x: {
+        ticks: { color: '#525252', maxTicksLimit: 6, font: { family: "'JetBrains Mono', monospace", size: 10 } },
+        grid: { color: '#E5E5E5' }
+      },
+      y: {
+        ticks: { color: '#525252', font: { family: "'JetBrains Mono', monospace", size: 10 } },
+        grid: { color: '#E5E5E5' },
+        title: { display: !!yLabel, text: yLabel, color: '#525252', font: { family: "'JetBrains Mono', monospace", size: 10 } }
+      }
     },
     plugins: {
-      legend: { labels: { color: '#e6e6e6', boxWidth: 12, font: { size: 11 } } }
+      legend: { labels: { color: '#000', boxWidth: 16, font: { family: "'JetBrains Mono', monospace", size: 10 } } }
     }
   };
 }
@@ -170,8 +352,8 @@ function baseChartOptions(yLabel) {
 const tempChart = new Chart(document.getElementById('tempChart'), {
   type: 'line',
   data: { labels: [], datasets: [{
-    label: 'Max temp (°C)', data: [], borderColor: '#ff5555',
-    backgroundColor: '#ff555522', fill: true, tension: 0.25, pointRadius: 0
+    label: 'Max temp (°C)', data: [], borderColor: '#000000',
+    backgroundColor: '#00000010', fill: true, tension: 0.15, pointRadius: 0, borderWidth: 2
   }]},
   options: baseChartOptions('°C')
 });
@@ -183,6 +365,7 @@ const queueChart = new Chart(document.getElementById('queueChart'), {
 });
 
 const engineDatasetIndex = {}; // engine name -> index into queueChart.data.datasets
+const engineColor = {};        // engine name -> assigned color
 
 function pushPoint(chart, label) {
   chart.data.labels.push(label);
@@ -214,13 +397,16 @@ async function pollStatus() {
       tempChart.update('none');
     }
 
-    // Ensure a dataset exists per engine, in stable (server-sorted) order.
-    data.engines.forEach((e, i) => {
+    data.engines.forEach((e) => {
       if (!(e.name in engineDatasetIndex)) {
-        const color = ENGINE_COLORS[Object.keys(engineDatasetIndex).length % ENGINE_COLORS.length];
+        const color = SERIES_COLORS[Object.keys(engineDatasetIndex).length % SERIES_COLORS.length];
+        engineColor[e.name] = color;
         queueChart.data.datasets.push({
-          label: e.name, data: [], borderColor: color,
-          backgroundColor: color + '22', fill: false, tension: 0.25, pointRadius: 0
+          label: e.name, data: [],
+          borderColor: color,
+          backgroundColor: color + '1A',
+          borderWidth: 2,
+          fill: false, tension: 0.15, pointRadius: 0
         });
         engineDatasetIndex[e.name] = queueChart.data.datasets.length - 1;
       }
@@ -233,9 +419,10 @@ async function pollStatus() {
     queueChart.update('none');
 
     const engineList = document.getElementById('engineList');
-    engineList.innerHTML = data.engines.map((e, i) =>
-      '<div class="stat-row"><span style="color:' + ENGINE_COLORS[i % ENGINE_COLORS.length] + '">● ' +
-      e.name + '</span><span class="stat-val">' + e.queue_depth + '</span></div>'
+    engineList.innerHTML = data.engines.map((e) =>
+      '<div class="engine-row"><span class="engine-name">' +
+      colorSwatchHtml(engineColor[e.name]) + e.name + '</span>' +
+      '<span class="stat-val">' + e.queue_depth + '</span></div>'
     ).join('');
 
     const select = document.getElementById('engineSelect');
@@ -256,8 +443,7 @@ pollStatus();
 // Predict form
 
 function colorForClass(classId) {
-  const hue = (classId * 137.508) % 360; // golden-angle spread, same scheme as test_client.cpp
-  return 'hsl(' + hue + ', 70%, 55%)';
+  return SERIES_COLORS[classId % SERIES_COLORS.length];
 }
 
 async function sendPredict() {
@@ -303,23 +489,23 @@ function renderResult(file, data, elapsedMs) {
     canvas.style.display = 'block';
     const ctx = canvas.getContext('2d');
     ctx.drawImage(img, 0, 0);
-
-    ctx.lineWidth = Math.max(2, img.width / 400);
-    ctx.font = Math.max(14, img.width / 80) + 'px sans-serif';
+    const baseWidth = Math.max(2, img.width / 400);
+    ctx.font = Math.max(14, img.width / 80) + 'px "Source Serif 4", Georgia, serif';
     ctx.textBaseline = 'bottom';
 
     for (const d of (data.detections || [])) {
       const color = colorForClass(d.class_id);
       ctx.strokeStyle = color;
+      ctx.lineWidth = baseWidth;
       ctx.strokeRect(d.x1, d.y1, d.x2 - d.x1, d.y2 - d.y1);
 
       const label = (d.class_name || ('cls_' + d.class_id)) + ' ' + d.confidence.toFixed(2);
       const textWidth = ctx.measureText(label).width;
       const labelY = Math.max(20, d.y1);
       ctx.fillStyle = color;
-      ctx.fillRect(d.x1, labelY - 20, textWidth + 8, 20);
-      ctx.fillStyle = '#000';
-      ctx.fillText(label, d.x1 + 4, labelY - 3);
+      ctx.fillRect(d.x1, labelY - 20, textWidth + 10, 20);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(label, d.x1 + 5, labelY - 3);
     }
   };
   img.src = URL.createObjectURL(file);
@@ -337,6 +523,5 @@ function renderResult(file, data, elapsedMs) {
   document.getElementById('predictResult').textContent = lines.join('\n');
 }
 </script>
-
 </body>
 </html>
