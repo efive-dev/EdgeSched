@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>EdgeSched Dashboard</title>
+<script src="vendor/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #2a2f3a;
+    --text: #e6e6e6;
+    --muted: #8a8f98;
+    --accent: #55aaff;
+    --danger: #ff5555;
+    --ok: #5cd68b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 24px;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px 0; }
+  .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    align-items: start;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+  }
+  .panel h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    margin: 0 0 14px 0;
+  }
+  .stat-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+  }
+  .stat-row:last-child { border-bottom: none; }
+  .stat-val { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .chart-wrap { position: relative; height: 160px; margin-top: 12px; }
+  select, input[type=number] {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 13px;
+  }
+  input[type=file] { font-size: 13px; color: var(--muted); }
+  button {
+    background: var(--accent);
+    color: #08111c;
+    border: none;
+    border-radius: 4px;
+    padding: 8px 16px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  button:hover { opacity: 0.9; }
+  .predict-controls {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+  }
+  #predictResult {
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    color: var(--muted);
+    white-space: pre-wrap;
+    margin-top: 10px;
+    line-height: 1.6;
+  }
+  #resultCanvas {
+    max-width: 100%;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    margin-top: 10px;
+    display: none;
+  }
+  .full-width { grid-column: 1 / -1; }
+</style>
+</head>
+<body>
+
+<h1>EdgeSched Live Dashboard</h1>
+<div class="subtitle">
+  Routing policy: <strong id="policyName">—</strong> ·
+  polling <code>/status</code> every 1s
+</div>
+
+<div class="grid">
+
+  <div class="panel">
+    <h2>System State</h2>
+    <div class="stat-row"><span>Max temperature</span><span class="stat-val" id="tempVal">—</span></div>
+    <div class="stat-row"><span>Power draw</span><span class="stat-val" id="powerVal">—</span></div>
+    <div class="stat-row"><span>GPU utilization</span><span class="stat-val" id="gpuVal">—</span></div>
+    <div class="stat-row"><span>RAM used</span><span class="stat-val" id="ramVal">—</span></div>
+    <div class="stat-row"><span>Power mode</span><span class="stat-val" id="powerModeVal">—</span></div>
+    <div class="chart-wrap"><canvas id="tempChart"></canvas></div>
+  </div>
+
+  <div class="panel">
+    <h2>Engine Queue Depth</h2>
+    <div id="engineList"></div>
+    <div class="chart-wrap"><canvas id="queueChart"></canvas></div>
+  </div>
+
+  <div class="panel full-width">
+    <h2>Send an Image</h2>
+    <div class="predict-controls">
+      <input type="file" id="imageInput" accept="image/*">
+      <select id="engineSelect"><option value="">(auto)</option></select>
+      <input type="number" id="budgetInput" placeholder="latency budget ms (optional)" style="width:220px">
+      <button onclick="sendPredict()">Predict</button>
+    </div>
+    <canvas id="resultCanvas"></canvas>
+    <div id="predictResult"></div>
+  </div>
+
+</div>
+
+<script>
+const HISTORY_LEN = 60; // seconds of history retained (1 point/sec)
+const ENGINE_COLORS = ['#55aaff', '#5cd68b', '#ffb454', '#ff6b9d', '#c792ea'];
+
+function nowLabel() {
+  const d = new Date();
+  return d.getHours().toString().padStart(2, '0') + ':' +
+         d.getMinutes().toString().padStart(2, '0') + ':' +
+         d.getSeconds().toString().padStart(2, '0');
+}
+
+function baseChartOptions(yLabel) {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    scales: {
+      x: { ticks: { color: '#8a8f98', maxTicksLimit: 6 }, grid: { color: '#2a2f3a' } },
+      y: { ticks: { color: '#8a8f98' }, grid: { color: '#2a2f3a' },
+           title: { display: !!yLabel, text: yLabel, color: '#8a8f98' } }
+    },
+    plugins: {
+      legend: { labels: { color: '#e6e6e6', boxWidth: 12, font: { size: 11 } } }
+    }
+  };
+}
+
+const tempChart = new Chart(document.getElementById('tempChart'), {
+  type: 'line',
+  data: { labels: [], datasets: [{
+    label: 'Max temp (°C)', data: [], borderColor: '#ff5555',
+    backgroundColor: '#ff555522', fill: true, tension: 0.25, pointRadius: 0
+  }]},
+  options: baseChartOptions('°C')
+});
+
+const queueChart = new Chart(document.getElementById('queueChart'), {
+  type: 'line',
+  data: { labels: [], datasets: [] },
+  options: baseChartOptions('requests waiting')
+});
+
+const engineDatasetIndex = {}; // engine name -> index into queueChart.data.datasets
+
+function pushPoint(chart, label) {
+  chart.data.labels.push(label);
+  if (chart.data.labels.length > HISTORY_LEN) chart.data.labels.shift();
+  chart.data.datasets.forEach(ds => {
+    if (ds.data.length > HISTORY_LEN) ds.data.shift();
+  });
+}
+
+async function pollStatus() {
+  try {
+    const resp = await fetch('/status');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const label = nowLabel();
+
+    document.getElementById('policyName').textContent = data.policy;
+
+    const sys = data.system;
+    document.getElementById('tempVal').textContent = sys.valid ? sys.max_temp_c.toFixed(1) + ' °C' : '—';
+    document.getElementById('powerVal').textContent = sys.valid ? (sys.power_mw / 1000).toFixed(2) + ' W' : '—';
+    document.getElementById('gpuVal').textContent = sys.valid ? sys.gpu_util_pct.toFixed(0) + ' %' : '—';
+    document.getElementById('ramVal').textContent = sys.valid ? sys.ram_used_mb + ' / ' + sys.ram_total_mb + ' MB' : '—';
+    document.getElementById('powerModeVal').textContent = sys.valid ? sys.power_mode : '—';
+
+    if (sys.valid) {
+      pushPoint(tempChart, label);
+      tempChart.data.datasets[0].data.push(sys.max_temp_c);
+      tempChart.update('none');
+    }
+
+    // Ensure a dataset exists per engine, in stable (server-sorted) order.
+    data.engines.forEach((e, i) => {
+      if (!(e.name in engineDatasetIndex)) {
+        const color = ENGINE_COLORS[Object.keys(engineDatasetIndex).length % ENGINE_COLORS.length];
+        queueChart.data.datasets.push({
+          label: e.name, data: [], borderColor: color,
+          backgroundColor: color + '22', fill: false, tension: 0.25, pointRadius: 0
+        });
+        engineDatasetIndex[e.name] = queueChart.data.datasets.length - 1;
+      }
+    });
+
+    pushPoint(queueChart, label);
+    data.engines.forEach(e => {
+      queueChart.data.datasets[engineDatasetIndex[e.name]].data.push(e.queue_depth);
+    });
+    queueChart.update('none');
+
+    const engineList = document.getElementById('engineList');
+    engineList.innerHTML = data.engines.map((e, i) =>
+      '<div class="stat-row"><span style="color:' + ENGINE_COLORS[i % ENGINE_COLORS.length] + '">● ' +
+      e.name + '</span><span class="stat-val">' + e.queue_depth + '</span></div>'
+    ).join('');
+
+    const select = document.getElementById('engineSelect');
+    const currentNames = Array.from(select.options).map(o => o.value).filter(v => v).join(',');
+    const newNames = data.engines.map(e => e.name);
+    if (currentNames !== newNames.join(',')) {
+      select.innerHTML = '<option value="">(auto)</option>' +
+        newNames.map(n => '<option value="' + n + '">' + n + '</option>').join('');
+    }
+  } catch (e) {
+    console.error('status poll failed', e);
+  }
+}
+
+setInterval(pollStatus, 1000);
+pollStatus();
+
+// Predict form
+
+function colorForClass(classId) {
+  const hue = (classId * 137.508) % 360; // golden-angle spread, same scheme as test_client.cpp
+  return 'hsl(' + hue + ', 70%, 55%)';
+}
+
+async function sendPredict() {
+  const fileInput = document.getElementById('imageInput');
+  if (!fileInput.files.length) { alert('Choose an image first.'); return; }
+  const file = fileInput.files[0];
+
+  const engine = document.getElementById('engineSelect').value;
+  const budget = document.getElementById('budgetInput').value;
+  const params = [];
+  if (engine) params.push('engine=' + encodeURIComponent(engine));
+  if (budget) params.push('latency_budget_ms=' + encodeURIComponent(budget));
+  const url = '/predict' + (params.length ? '?' + params.join('&') : '');
+
+  const resultEl = document.getElementById('predictResult');
+  resultEl.textContent = 'sending…';
+
+  try {
+    const buf = await file.arrayBuffer();
+    const t0 = performance.now();
+    const resp = await fetch(url, { method: 'POST', body: buf });
+    const elapsedMs = performance.now() - t0;
+
+    if (!resp.ok) {
+      const text = await resp.text();
+      resultEl.textContent = 'Error ' + resp.status + ': ' + text;
+      return;
+    }
+
+    const data = await resp.json();
+    renderResult(file, data, elapsedMs);
+  } catch (e) {
+    resultEl.textContent = 'Request failed: ' + e;
+  }
+}
+
+function renderResult(file, data, elapsedMs) {
+  const img = new Image();
+  img.onload = () => {
+    const canvas = document.getElementById('resultCanvas');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    canvas.style.display = 'block';
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+
+    ctx.lineWidth = Math.max(2, img.width / 400);
+    ctx.font = Math.max(14, img.width / 80) + 'px sans-serif';
+    ctx.textBaseline = 'bottom';
+
+    for (const d of (data.detections || [])) {
+      const color = colorForClass(d.class_id);
+      ctx.strokeStyle = color;
+      ctx.strokeRect(d.x1, d.y1, d.x2 - d.x1, d.y2 - d.y1);
+
+      const label = (d.class_name || ('cls_' + d.class_id)) + ' ' + d.confidence.toFixed(2);
+      const textWidth = ctx.measureText(label).width;
+      const labelY = Math.max(20, d.y1);
+      ctx.fillStyle = color;
+      ctx.fillRect(d.x1, labelY - 20, textWidth + 8, 20);
+      ctx.fillStyle = '#000';
+      ctx.fillText(label, d.x1 + 4, labelY - 3);
+    }
+  };
+  img.src = URL.createObjectURL(file);
+
+  const lines = [
+    'engine=' + data.engine + '  auto_routed=' + data.auto_routed,
+    'preprocess=' + data.preprocess_ms.toFixed(1) + 'ms  ' +
+      'inference=' + data.inference_ms.toFixed(1) + 'ms  ' +
+      'postprocess=' + data.postprocess_ms.toFixed(2) + 'ms',
+    'round_trip=' + elapsedMs.toFixed(0) + 'ms (client-observed, includes network)',
+    'queue_depth_at_submit=' + data.queue_depth_at_submit + '  ' +
+      'latency_budget_ms=' + data.latency_budget_ms,
+    'detections=' + (data.detections || []).length
+  ];
+  document.getElementById('predictResult').textContent = lines.join('\n');
+}
+</script>
+
+</body>
+</html>
