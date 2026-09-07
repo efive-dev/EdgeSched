@@ -33,39 +33,9 @@ the fast and accurate tiers in parallel) is what the Go scheduler job.
 ### Request sequence diagram
 Shows one `Predict` call end to end:
 
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant S as InferenceServiceImpl
-    participant P as preprocessLetterbox
-    participant E as TensorRTEngine
-    participant Q as postprocess
-
-    C->>S: Predict(image_data)
-    S->>S: cv::imdecode
-    S->>P: preprocessLetterbox(image, 640)
-    P-->>S: input tensor + PreprocessMeta
-    S->>E: infer(input tensor)  [mutex-guarded]
-    E-->>S: raw output (1,300,6)
-    S->>Q: postprocess(raw output, meta, confThreshold)
-    Q-->>S: detections (original-image pixel space)
-    S-->>C: PredictResponse (detections + per-stage timings)
-```
+![predict call end to end](img/predict.png)
 
 ### 2. Component ownership diagram
 Shows what owns what. Visualizes the "one process per engine" decision and where the mutex sits relative to the engine.
 
-```mermaid
-graph TD
-    subgraph "One process per engine tier"
-        SM[server_main] --> TE[TensorRTEngine]
-        SM --> ISI[InferenceServiceImpl]
-        ISI -->|shared_ptr, mutex-guarded| TE
-        ISI --> PP[preprocessLetterbox]
-        ISI --> PO[postprocess]
-        TE --> RT[IRuntime]
-        TE --> ENG[ICudaEngine]
-        TE --> CTX[IExecutionContext]
-    end
-    GC[gRPC ServerBuilder] -->|listens on port, e.g. 50051| ISI
-```
+![ownership diagram for engines](img/ownershipdiagram.png)

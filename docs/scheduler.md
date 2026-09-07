@@ -28,16 +28,7 @@ The Go control plane is the client-facing side of EdgeSched, it connects to one 
 ## Diagrams
 Eventually a scheduler will be implemented and this is generally how it will work:
 
-```mermaid
-graph TD
-    U[Client request] --> H[api.Server]
-    H --> RP[RoutingPolicy]
-    M[System Monitor: thermal/power] -.-> RP
-    RP -->|selects engine| WP1[Worker Pool: yolo26n_int8]
-    RP -->|selects engine| WP2[Worker Pool: yolo26m_fp16]
-    WP1 --> C1[engineclient.Client]
-    WP2 --> C2[engineclient.Client]
-```
+![scheduler control plane](img/schedulerControlPlane.png)
 ## System Monitor
 `internal/sysmonitor` polls Jetson system state in the background and exposes the latest reading via a lock free atomic snapshot (`atomic.Pointer[State]`), so routing decisions can read current state without blocking on or triggering fresh I/O.
 
