@@ -2,323 +2,269 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>EdgeSched Dashboard</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<title>EDGESCHED // LIVE</title>
 <script src="vendor/chart.umd.min.js"></script>
 <style>
   :root {
-    --bg: #FFFFFF;
-    --fg: #000000;
-    --muted-bg: #F5F5F5;
-    --muted-fg: #525252;
-    --border: #000000;
-    --border-light: #E5E5E5;
-
-    --font-display: "Playfair Display", Georgia, serif;
-    --font-body: "Source Serif 4", Georgia, serif;
-    --font-mono: "JetBrains Mono", ui-monospace, monospace;
+    --bg: #09090B;
+    --fg: #FAFAFA;
+    --muted: #27272A;
+    --muted-fg: #A1A1AA;
+    --accent: #DFE104;
+    --accent-fg: #000000;
+    --border: #3F3F46;
   }
-
   * { box-sizing: border-box; }
-
-  html, body { background: var(--bg); }
-
   body {
     margin: 0;
+    background: var(--bg);
     color: var(--fg);
-    font-family: var(--font-body);
-    position: relative;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+                 Roboto, Arial, sans-serif;
   }
+  ::selection { background: var(--accent); color: var(--accent-fg); }
 
-  /* Layered monochrome texture — global hairline pattern, kept extremely subtle */
-  body::before {
-    content: "";
-    position: fixed;
-    inset: 0;
-    pointer-events: none;
-    z-index: 0;
-    background-image: repeating-linear-gradient(
-      0deg, transparent, transparent 1px, #000 1px, #000 2px
-    );
-    background-size: 100% 4px;
-    opacity: 0.015;
-  }
+  .page { padding: 40px 32px 64px; max-width: 1400px; margin: 0 auto; }
 
-  header, main { position: relative; z-index: 1; }
-
-  header {
-    padding: 40px 48px 32px;
-    border-bottom: 4px solid var(--border);
-  }
-
-  h1 {
-    font-family: var(--font-display);
-    font-weight: 700;
-    font-size: clamp(2.25rem, 4.5vw, 3.5rem);
-    letter-spacing: -0.025em;
-    line-height: 1;
-    margin: 0 0 14px 0;
-  }
-
-  .subtitle {
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-    letter-spacing: 0.08em;
+  h1.hero {
+    font-size: clamp(2.5rem, 6vw, 5rem);
+    line-height: 0.9;
+    letter-spacing: -0.02em;
     text-transform: uppercase;
+    font-weight: 700;
+    margin: 0 0 4px 0;
+  }
+  h1.hero .accent-word { color: var(--accent); }
+  .subtitle {
     color: var(--muted-fg);
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 40px;
   }
+  .subtitle strong { color: var(--fg); }
 
-  .subtitle strong {
-    color: var(--fg);
-    font-weight: 600;
-  }
-
-  main {
-    padding: 40px 48px 56px;
+  h2.section-label {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--muted-fg);
+    font-weight: 700;
+    margin: 0 0 18px 0;
+    border-bottom: 2px solid var(--border);
+    padding-bottom: 10px;
   }
 
   .grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 24px;
-    align-items: start;
+    gap: 2px;
+    background: var(--border);
+    margin-bottom: 2px;
   }
-
   .panel {
     background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 0;
-    padding: 28px 32px;
+    padding: 24px 28px;
   }
+  .full-width { grid-column: 1 / -1; }
 
-  .panel h2 {
-    font-family: var(--font-mono);
-    font-size: 0.7rem;
-    font-weight: 600;
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+    margin-bottom: 8px;
+  }
+  .stat-block { border-left: 4px solid var(--accent); padding-left: 14px; }
+  .stat-label {
+    font-size: 11px;
     text-transform: uppercase;
-    letter-spacing: 0.14em;
+    letter-spacing: 0.1em;
     color: var(--muted-fg);
-    margin: 0 0 18px 0;
-    padding-bottom: 12px;
-    border-bottom: 1px solid var(--border-light);
+    font-weight: 700;
+    margin-bottom: 2px;
   }
-
-  .stat-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    padding: 9px 0;
-    border-bottom: 1px solid var(--border-light);
-    font-size: 1rem;
-  }
-  .stat-row:last-child { border-bottom: none; }
-
-  .stat-val {
-    font-family: var(--font-mono);
+  .stat-number {
+    font-size: clamp(2rem, 4vw, 3.2rem);
+    font-weight: 700;
+    line-height: 1;
     font-variant-numeric: tabular-nums;
-    font-weight: 600;
-    letter-spacing: -0.01em;
+    letter-spacing: -0.02em;
   }
+  .stat-number.hot { color: var(--accent); }
+  .stat-sub { font-size: 12px; color: var(--muted-fg); margin-top: 2px; text-transform: uppercase; }
 
-  .chart-wrap {
-    position: relative;
-    height: 170px;
-    margin-top: 18px;
-    padding-top: 16px;
-    border-top: 1px solid var(--border-light);
-  }
+  .chart-wrap { position: relative; height: 180px; margin-top: 18px; }
 
   .engine-row {
     display: flex;
     justify-content: space-between;
-    align-items: center;
-    padding: 9px 0;
-    border-bottom: 1px solid var(--border-light);
-    font-size: 0.95rem;
+    align-items: baseline;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+    text-transform: uppercase;
+    font-weight: 700;
+    font-size: 14px;
   }
   .engine-row:last-child { border-bottom: none; }
+  .engine-queue { font-size: 28px; font-variant-numeric: tabular-nums; }
 
-  .engine-name {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .engine-name .swatch {
-    width: 11px;
-    height: 11px;
-    flex-shrink: 0;
-    display: inline-block;
-  }
-
-  select, input[type=number] {
-    background: var(--bg);
-    color: var(--fg);
-    font-family: var(--font-mono);
-    font-size: 0.82rem;
-    border: none;
-    border-bottom: 2px solid var(--border);
-    border-radius: 0;
-    padding: 8px 4px;
-    outline: none;
-    transition: border-width 100ms;
-  }
-  select:focus, input[type=number]:focus {
-    border-bottom-width: 4px;
-  }
-  input[type=number] { width: 220px; }
-  input[type=number]::placeholder { color: var(--muted-fg); font-style: italic; }
-
-  input[type=file] {
-    font-family: var(--font-mono);
-    font-size: 0.8rem;
+  .live-feed-meta {
+    font-family: ui-monospace, "SF Mono", monospace;
+    font-size: 12px;
     color: var(--muted-fg);
+    text-transform: none;
+    letter-spacing: 0;
+    margin-top: 12px;
+    line-height: 1.7;
+    white-space: pre-wrap;
   }
-  input[type=file]::file-selector-button {
-    background: var(--fg);
-    color: var(--bg);
-    border: none;
-    border-radius: 0;
-    padding: 8px 16px;
-    font-family: var(--font-mono);
-    font-size: 0.72rem;
-    font-weight: 600;
+  #liveCanvas {
+    max-width: 100%;
+    border: 2px solid var(--border);
+    display: block;
+    background: var(--muted);
+  }
+  .live-feed-placeholder {
+    color: var(--muted-fg);
     text-transform: uppercase;
-    letter-spacing: 0.08em;
-    margin-right: 14px;
-    cursor: pointer;
-    transition: background-color 100ms, color 100ms;
+    font-size: 13px;
+    letter-spacing: 0.05em;
+    padding: 60px 0;
+    text-align: center;
+    border: 2px dashed var(--border);
   }
-  input[type=file]::file-selector-button:hover {
-    background: var(--bg);
-    color: var(--fg);
-    box-shadow: inset 0 0 0 1px var(--border);
-  }
-
-  button {
-    background: var(--fg);
-    color: var(--bg);
-    border: 2px solid var(--fg);
-    border-radius: 0;
-    padding: 10px 28px;
-    font-family: var(--font-mono);
-    font-weight: 600;
-    font-size: 0.78rem;
+  .badge {
+    display: inline-block;
+    background: var(--accent);
+    color: var(--accent-fg);
     text-transform: uppercase;
-    letter-spacing: 0.1em;
-    cursor: pointer;
-    transition: background-color 100ms, color 100ms;
-  }
-  button:hover {
-    background: var(--bg);
-    color: var(--fg);
-  }
-  button:focus-visible,
-  select:focus-visible,
-  input:focus-visible {
-    outline: 3px solid var(--fg);
-    outline-offset: 3px;
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    padding: 3px 8px;
+    margin-right: 8px;
   }
 
   .predict-controls {
     display: flex;
-    gap: 20px;
-    align-items: center;
+    gap: 0;
+    align-items: stretch;
     flex-wrap: wrap;
-    margin-bottom: 22px;
-    padding-bottom: 22px;
-    border-bottom: 1px solid var(--border-light);
+    margin-bottom: 20px;
+    border: 2px solid var(--border);
   }
-
-  #predictResult {
-    font-family: var(--font-mono);
-    font-size: 0.78rem;
-    color: var(--muted-fg);
-    white-space: pre-wrap;
-    margin-top: 18px;
-    line-height: 1.75;
+  .predict-controls > * {
+    background: var(--bg);
+    color: var(--fg);
+    border: none;
+    border-right: 2px solid var(--border);
+    padding: 14px 16px;
+    font-family: inherit;
+    font-size: 13px;
+    text-transform: uppercase;
+    font-weight: 700;
   }
+  .predict-controls > *:last-child { border-right: none; }
+  input[type=file] { flex: 1; min-width: 220px; }
+  select, input[type=number] { min-width: 140px; }
+  button.predict-btn {
+    background: var(--accent);
+    color: var(--accent-fg);
+    cursor: pointer;
+    transition: transform 0.15s ease-in-out;
+    letter-spacing: 0.05em;
+  }
+  button.predict-btn:hover { transform: scale(1.03); }
+  button.predict-btn:active { transform: scale(0.96); }
 
   #resultCanvas {
     max-width: 100%;
-    border: 1px solid var(--border);
-    border-radius: 0;
-    margin-top: 18px;
+    border: 2px solid var(--border);
+    margin-top: 10px;
     display: none;
+    background: var(--muted);
   }
-
-  .full-width { grid-column: 1 / -1; }
-
-  @media (max-width: 760px) {
-    header { padding: 28px 24px 24px; }
-    main { padding: 28px 24px 40px; }
-    .grid { grid-template-columns: 1fr; }
-    .panel { padding: 22px 20px; }
-    input[type=number] { width: 100%; }
+  #predictResult {
+    font-family: ui-monospace, "SF Mono", monospace;
+    font-size: 12px;
+    color: var(--muted-fg);
+    white-space: pre-wrap;
+    margin-top: 12px;
+    line-height: 1.7;
   }
 </style>
 </head>
 <body>
 
-<header>
-  <h1>EdgeSched</h1>
+<div class="page">
+
+  <h1 class="hero">EDGE<span class="accent-word">SCHED</span></h1>
   <div class="subtitle">
-    Routing policy — <strong id="policyName">—</strong> · polling /status every 1s
-  </div>
-</header>
-
-<main>
-<div class="grid">
-
-  <div class="panel">
-    <h2>System State</h2>
-    <div class="stat-row"><span>Max temperature</span><span class="stat-val" id="tempVal">—</span></div>
-    <div class="stat-row"><span>Power draw</span><span class="stat-val" id="powerVal">—</span></div>
-    <div class="stat-row"><span>GPU utilization</span><span class="stat-val" id="gpuVal">—</span></div>
-    <div class="stat-row"><span>RAM used</span><span class="stat-val" id="ramVal">—</span></div>
-    <div class="stat-row"><span>Power mode</span><span class="stat-val" id="powerModeVal">—</span></div>
-    <div class="chart-wrap"><canvas id="tempChart"></canvas></div>
+    Routing policy: <strong id="policyName">—</strong> &nbsp;·&nbsp;
+    live state polled every 1s &nbsp;·&nbsp;
+    Jetson Orin Nano
   </div>
 
-  <div class="panel">
-    <h2>Engine Queue Depth</h2>
-    <div id="engineList"></div>
-    <div class="chart-wrap"><canvas id="queueChart"></canvas></div>
-  </div>
+  <div class="grid">
 
-  <div class="panel full-width">
-    <h2>Send an Image</h2>
-    <div class="predict-controls">
-      <input type="file" id="imageInput" accept="image/*">
-      <select id="engineSelect"><option value="">(auto)</option></select>
-      <input type="number" id="budgetInput" placeholder="latency budget ms (optional)">
-      <button onclick="sendPredict()">Predict</button>
+    <div class="panel">
+      <h2 class="section-label">System State</h2>
+      <div class="stat-grid">
+        <div class="stat-block">
+          <div class="stat-label">Max Temp</div>
+          <div class="stat-number" id="tempVal">—</div>
+          <div class="stat-sub">°C</div>
+        </div>
+        <div class="stat-block">
+          <div class="stat-label">Power Draw</div>
+          <div class="stat-number" id="powerVal">—</div>
+          <div class="stat-sub">Watts</div>
+        </div>
+        <div class="stat-block">
+          <div class="stat-label">GPU Util</div>
+          <div class="stat-number" id="gpuVal">—</div>
+          <div class="stat-sub">Percent</div>
+        </div>
+        <div class="stat-block">
+          <div class="stat-label">Power Mode</div>
+          <div class="stat-number" id="powerModeVal" style="font-size:1.6rem">—</div>
+          <div class="stat-sub" id="ramVal">— MB RAM</div>
+        </div>
+      </div>
+      <div class="chart-wrap"><canvas id="tempChart"></canvas></div>
     </div>
-    <canvas id="resultCanvas"></canvas>
-    <div id="predictResult"></div>
-  </div>
 
+    <div class="panel">
+      <h2 class="section-label">Engine Queues</h2>
+      <div id="engineList"></div>
+      <div class="chart-wrap"><canvas id="queueChart"></canvas></div>
+    </div>
+
+    <div class="panel full-width">
+      <h2 class="section-label">Live Feed &mdash; Most Recent Prediction (Any Source)</h2>
+      <div id="liveFeedContent">
+        <div class="live-feed-placeholder">Waiting for the first prediction…</div>
+      </div>
+    </div>
+
+    <div class="panel full-width">
+      <h2 class="section-label">Send An Image</h2>
+      <div class="predict-controls">
+        <input type="file" id="imageInput" accept="image/*">
+        <select id="engineSelect"><option value="">(auto)</option></select>
+        <input type="number" id="budgetInput" placeholder="Budget MS">
+        <button class="predict-btn" onclick="sendPredict()">Predict &rarr;</button>
+      </div>
+      <canvas id="resultCanvas"></canvas>
+      <div id="predictResult"></div>
+    </div>
+
+  </div>
 </div>
-</main>
 
 <script>
-const HISTORY_LEN = 60; // seconds of history retained (1 point/sec)
-
-const SERIES_COLORS = [
-  '#8B1A1A', // ink crimson
-  '#1B4B43', // deep teal
-  '#9C6B0B', // dark ochre
-  '#3B3562', // indigo
-  '#5C5F2D', // olive
-  '#7A3B69', // plum
-];
-
-function colorSwatchHtml(color) {
-  return '<span class="swatch" style="background:' + color + '"></span>';
-}
+const HISTORY_LEN = 60;
+const ENGINE_COLORS = ['#DFE104', '#5cd68b', '#ff6b9d', '#55aaff', '#c792ea'];
 
 function nowLabel() {
   const d = new Date();
@@ -333,18 +279,13 @@ function baseChartOptions(yLabel) {
     maintainAspectRatio: false,
     animation: false,
     scales: {
-      x: {
-        ticks: { color: '#525252', maxTicksLimit: 6, font: { family: "'JetBrains Mono', monospace", size: 10 } },
-        grid: { color: '#E5E5E5' }
-      },
-      y: {
-        ticks: { color: '#525252', font: { family: "'JetBrains Mono', monospace", size: 10 } },
-        grid: { color: '#E5E5E5' },
-        title: { display: !!yLabel, text: yLabel, color: '#525252', font: { family: "'JetBrains Mono', monospace", size: 10 } }
-      }
+      x: { ticks: { color: '#A1A1AA', maxTicksLimit: 6, font: { family: 'monospace', size: 10 } },
+           grid: { color: '#3F3F46' } },
+      y: { ticks: { color: '#A1A1AA' }, grid: { color: '#3F3F46' },
+           title: { display: !!yLabel, text: yLabel, color: '#A1A1AA' } }
     },
     plugins: {
-      legend: { labels: { color: '#000', boxWidth: 16, font: { family: "'JetBrains Mono', monospace", size: 10 } } }
+      legend: { labels: { color: '#FAFAFA', boxWidth: 12, font: { size: 11, weight: 'bold' } } }
     }
   };
 }
@@ -352,8 +293,8 @@ function baseChartOptions(yLabel) {
 const tempChart = new Chart(document.getElementById('tempChart'), {
   type: 'line',
   data: { labels: [], datasets: [{
-    label: 'Max temp (°C)', data: [], borderColor: '#000000',
-    backgroundColor: '#00000010', fill: true, tension: 0.15, pointRadius: 0, borderWidth: 2
+    label: 'MAX TEMP (°C)', data: [], borderColor: '#DFE104',
+    backgroundColor: '#DFE10422', fill: true, tension: 0.2, pointRadius: 0, borderWidth: 2
   }]},
   options: baseChartOptions('°C')
 });
@@ -364,15 +305,79 @@ const queueChart = new Chart(document.getElementById('queueChart'), {
   options: baseChartOptions('requests waiting')
 });
 
-const engineDatasetIndex = {}; // engine name -> index into queueChart.data.datasets
-const engineColor = {};        // engine name -> assigned color
+const engineDatasetIndex = {};
 
 function pushPoint(chart, label) {
   chart.data.labels.push(label);
   if (chart.data.labels.length > HISTORY_LEN) chart.data.labels.shift();
-  chart.data.datasets.forEach(ds => {
-    if (ds.data.length > HISTORY_LEN) ds.data.shift();
-  });
+  chart.data.datasets.forEach(ds => { if (ds.data.length > HISTORY_LEN) ds.data.shift(); });
+}
+
+function colorForClass(classId) {
+  const hue = (classId * 137.508) % 360;
+  return 'hsl(' + hue + ', 80%, 60%)';
+}
+
+function drawDetections(ctx, img, detections) {
+  ctx.drawImage(img, 0, 0);
+  ctx.lineWidth = Math.max(2, img.width / 400);
+  ctx.font = 'bold ' + Math.max(14, img.width / 80) + 'px sans-serif';
+  ctx.textBaseline = 'bottom';
+
+  for (const d of (detections || [])) {
+    const color = colorForClass(d.class_id);
+    ctx.strokeStyle = color;
+    ctx.strokeRect(d.x1, d.y1, d.x2 - d.x1, d.y2 - d.y1);
+
+    const label = ((d.class_name || ('CLS_' + d.class_id)) + ' ' + d.confidence.toFixed(2)).toUpperCase();
+    const textWidth = ctx.measureText(label).width;
+    const labelY = Math.max(20, d.y1);
+    ctx.fillStyle = color;
+    ctx.fillRect(d.x1, labelY - 22, textWidth + 10, 22);
+    ctx.fillStyle = '#000';
+    ctx.fillText(label, d.x1 + 5, labelY - 4);
+  }
+}
+
+let lastSeenResultAt = 0;
+let liveFeedInitialized = false;
+
+async function fetchLastResult() {
+  try {
+    const resp = await fetch('/last-result');
+    if (!resp.ok) return; // 404 = nothing predicted yet, fine
+
+    const data = await resp.json();
+
+    const content = document.getElementById('liveFeedContent');
+    if (!liveFeedInitialized) {
+      content.innerHTML =
+        '<canvas id="liveCanvas"></canvas><div class="live-feed-meta" id="liveFeedMeta"></div>';
+      liveFeedInitialized = true;
+    }
+
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.getElementById('liveCanvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      drawDetections(canvas.getContext('2d'), img, data.detections);
+    };
+    img.src = 'data:image/jpeg;base64,' + data.image_base64;
+
+    const ageSec = ((Date.now() - data.timestamp_ms) / 1000).toFixed(0);
+    document.getElementById('liveFeedMeta').innerHTML =
+      '<span class="badge">' + data.engine.toUpperCase() + '</span>' +
+      '<span class="badge" style="background:var(--muted-fg);color:#000">' +
+      (data.auto_routed ? 'AUTO-ROUTED' : 'MANUAL') + '</span>\n\n' +
+      'preprocess=' + data.preprocess_ms.toFixed(1) + 'ms  ' +
+      'inference=' + data.inference_ms.toFixed(1) + 'ms  ' +
+      'postprocess=' + data.postprocess_ms.toFixed(2) + 'ms\n' +
+      'detections=' + (data.detections || []).length + '  ' +
+      '(' + ageSec + 's ago)';
+  } catch (e) {
+    console.error('last-result fetch failed', e);
+  }
 }
 
 async function pollStatus() {
@@ -382,14 +387,15 @@ async function pollStatus() {
     const data = await resp.json();
     const label = nowLabel();
 
-    document.getElementById('policyName').textContent = data.policy;
+    document.getElementById('policyName').textContent = data.policy.toUpperCase();
 
     const sys = data.system;
-    document.getElementById('tempVal').textContent = sys.valid ? sys.max_temp_c.toFixed(1) + ' °C' : '—';
-    document.getElementById('powerVal').textContent = sys.valid ? (sys.power_mw / 1000).toFixed(2) + ' W' : '—';
-    document.getElementById('gpuVal').textContent = sys.valid ? sys.gpu_util_pct.toFixed(0) + ' %' : '—';
-    document.getElementById('ramVal').textContent = sys.valid ? sys.ram_used_mb + ' / ' + sys.ram_total_mb + ' MB' : '—';
+    document.getElementById('tempVal').textContent = sys.valid ? sys.max_temp_c.toFixed(1) : '—';
+    document.getElementById('tempVal').className = 'stat-number' + (sys.valid && sys.max_temp_c >= 55 ? ' hot' : '');
+    document.getElementById('powerVal').textContent = sys.valid ? (sys.power_mw / 1000).toFixed(2) : '—';
+    document.getElementById('gpuVal').textContent = sys.valid ? sys.gpu_util_pct.toFixed(0) : '—';
     document.getElementById('powerModeVal').textContent = sys.valid ? sys.power_mode : '—';
+    document.getElementById('ramVal').textContent = sys.valid ? (sys.ram_used_mb + ' / ' + sys.ram_total_mb + ' MB RAM') : '—';
 
     if (sys.valid) {
       pushPoint(tempChart, label);
@@ -399,19 +405,14 @@ async function pollStatus() {
 
     data.engines.forEach((e) => {
       if (!(e.name in engineDatasetIndex)) {
-        const color = SERIES_COLORS[Object.keys(engineDatasetIndex).length % SERIES_COLORS.length];
-        engineColor[e.name] = color;
+        const color = ENGINE_COLORS[Object.keys(engineDatasetIndex).length % ENGINE_COLORS.length];
         queueChart.data.datasets.push({
-          label: e.name, data: [],
-          borderColor: color,
-          backgroundColor: color + '1A',
-          borderWidth: 2,
-          fill: false, tension: 0.15, pointRadius: 0
+          label: e.name.toUpperCase(), data: [], borderColor: color,
+          backgroundColor: color + '22', fill: false, tension: 0.2, pointRadius: 0, borderWidth: 2
         });
         engineDatasetIndex[e.name] = queueChart.data.datasets.length - 1;
       }
     });
-
     pushPoint(queueChart, label);
     data.engines.forEach(e => {
       queueChart.data.datasets[engineDatasetIndex[e.name]].data.push(e.queue_depth);
@@ -419,10 +420,9 @@ async function pollStatus() {
     queueChart.update('none');
 
     const engineList = document.getElementById('engineList');
-    engineList.innerHTML = data.engines.map((e) =>
-      '<div class="engine-row"><span class="engine-name">' +
-      colorSwatchHtml(engineColor[e.name]) + e.name + '</span>' +
-      '<span class="stat-val">' + e.queue_depth + '</span></div>'
+    engineList.innerHTML = data.engines.map((e, i) =>
+      '<div class="engine-row"><span style="color:' + ENGINE_COLORS[i % ENGINE_COLORS.length] + '">&#9632; ' +
+      e.name + '</span><span class="engine-queue">' + e.queue_depth + '</span></div>'
     ).join('');
 
     const select = document.getElementById('engineSelect');
@@ -430,7 +430,12 @@ async function pollStatus() {
     const newNames = data.engines.map(e => e.name);
     if (currentNames !== newNames.join(',')) {
       select.innerHTML = '<option value="">(auto)</option>' +
-        newNames.map(n => '<option value="' + n + '">' + n + '</option>').join('');
+        newNames.map(n => '<option value="' + n + '">' + n.toUpperCase() + '</option>').join('');
+    }
+
+    if (data.last_result_at > 0 && data.last_result_at !== lastSeenResultAt) {
+      lastSeenResultAt = data.last_result_at;
+      fetchLastResult();
     }
   } catch (e) {
     console.error('status poll failed', e);
@@ -440,11 +445,6 @@ async function pollStatus() {
 setInterval(pollStatus, 1000);
 pollStatus();
 
-// Predict form
-
-function colorForClass(classId) {
-  return SERIES_COLORS[classId % SERIES_COLORS.length];
-}
 
 async function sendPredict() {
   const fileInput = document.getElementById('imageInput');
@@ -459,7 +459,7 @@ async function sendPredict() {
   const url = '/predict' + (params.length ? '?' + params.join('&') : '');
 
   const resultEl = document.getElementById('predictResult');
-  resultEl.textContent = 'sending…';
+  resultEl.textContent = 'SENDING…';
 
   try {
     const buf = await file.arrayBuffer();
@@ -469,14 +469,14 @@ async function sendPredict() {
 
     if (!resp.ok) {
       const text = await resp.text();
-      resultEl.textContent = 'Error ' + resp.status + ': ' + text;
+      resultEl.textContent = 'ERROR ' + resp.status + ': ' + text;
       return;
     }
 
     const data = await resp.json();
     renderResult(file, data, elapsedMs);
   } catch (e) {
-    resultEl.textContent = 'Request failed: ' + e;
+    resultEl.textContent = 'REQUEST FAILED: ' + e;
   }
 }
 
@@ -487,41 +487,22 @@ function renderResult(file, data, elapsedMs) {
     canvas.width = img.width;
     canvas.height = img.height;
     canvas.style.display = 'block';
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(img, 0, 0);
-    const baseWidth = Math.max(2, img.width / 400);
-    ctx.font = Math.max(14, img.width / 80) + 'px "Source Serif 4", Georgia, serif';
-    ctx.textBaseline = 'bottom';
-
-    for (const d of (data.detections || [])) {
-      const color = colorForClass(d.class_id);
-      ctx.strokeStyle = color;
-      ctx.lineWidth = baseWidth;
-      ctx.strokeRect(d.x1, d.y1, d.x2 - d.x1, d.y2 - d.y1);
-
-      const label = (d.class_name || ('cls_' + d.class_id)) + ' ' + d.confidence.toFixed(2);
-      const textWidth = ctx.measureText(label).width;
-      const labelY = Math.max(20, d.y1);
-      ctx.fillStyle = color;
-      ctx.fillRect(d.x1, labelY - 20, textWidth + 10, 20);
-      ctx.fillStyle = '#ffffff';
-      ctx.fillText(label, d.x1 + 5, labelY - 3);
-    }
+    drawDetections(canvas.getContext('2d'), img, data.detections);
   };
   img.src = URL.createObjectURL(file);
 
   const lines = [
-    'engine=' + data.engine + '  auto_routed=' + data.auto_routed,
+    'ENGINE=' + data.engine.toUpperCase() + '  AUTO_ROUTED=' + data.auto_routed,
     'preprocess=' + data.preprocess_ms.toFixed(1) + 'ms  ' +
       'inference=' + data.inference_ms.toFixed(1) + 'ms  ' +
       'postprocess=' + data.postprocess_ms.toFixed(2) + 'ms',
-    'round_trip=' + elapsedMs.toFixed(0) + 'ms (client-observed, includes network)',
-    'queue_depth_at_submit=' + data.queue_depth_at_submit + '  ' +
-      'latency_budget_ms=' + data.latency_budget_ms,
+    'round_trip=' + elapsedMs.toFixed(0) + 'ms (client-observed)',
+    'queue_depth_at_submit=' + data.queue_depth_at_submit + '  latency_budget_ms=' + data.latency_budget_ms,
     'detections=' + (data.detections || []).length
   ];
   document.getElementById('predictResult').textContent = lines.join('\n');
 }
 </script>
+
 </body>
 </html>
