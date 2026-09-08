@@ -3,6 +3,7 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	"edgesched/scheduler/internal/engineclient"
@@ -29,6 +31,10 @@ type Server struct {
 	policyName       string
 	metrics          *metrics.Registry
 	maxLatencyBudget time.Duration
+	// lastResult caches the most recently successful prediction
+	// image + detections
+	lastResultMu sync.RWMutex
+	lastResult   *lastResultJSON
 }
 
 func NewServer(
@@ -84,10 +90,7 @@ func parseLatencyBudget(r *http.Request, maxBudget time.Duration) (time.Duration
 	if err != nil || ms <= 0 {
 		return 0, fmt.Errorf("invalid latency_budget_ms: %q (must be a positive integer)", raw)
 	}
-	budget := time.Duration(ms) * time.Millisecond
-	if budget > maxBudget {
-		budget = maxBudget
-	}
+	budget := min(time.Duration(ms)*time.Millisecond, maxBudget)
 	return budget, nil
 }
 
@@ -206,6 +209,18 @@ func (s *Server) HandlePredict(w http.ResponseWriter, r *http.Request) {
 				ClassName:  d.GetClassName(),
 			})
 		}
+		s.lastResultMu.Lock()
+		s.lastResult = &lastResultJSON{
+			ImageBase64:   base64.StdEncoding.EncodeToString(imageData),
+			Engine:        engineName,
+			AutoRouted:    autoRouted,
+			PreprocessMs:  resp.GetPreprocessMs(),
+			InferenceMs:   resp.GetInferenceMs(),
+			PostprocessMs: resp.GetPostprocessMs(),
+			Detections:    out.Detections,
+			TimestampMs:   time.Now().UnixMilli(),
+		}
+		s.lastResultMu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(out); err != nil {
 			slog.Error("failed to encode response", "error", err)
@@ -251,6 +266,20 @@ func boolLabel(b bool) string {
 	return "false"
 }
 
+// HandleLastResult handles GET /last-result, returns the most
+// recently successfully processed image (base64) plus its detections
+func (s *Server) HandleLastResult(w http.ResponseWriter, r *http.Request) {
+	s.lastResultMu.RLock()
+	result := s.lastResult
+	s.lastResultMu.RUnlock()
+	if result == nil {
+		http.Error(w, "no successful predictions yet", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
 type engineStatusJSON struct {
 	Name       string `json:"name"`
 	QueueDepth int    `json:"queue_depth"`
@@ -267,9 +296,22 @@ type systemStatusJSON struct {
 }
 
 type statusJSON struct {
-	Policy  string             `json:"policy"`
-	Engines []engineStatusJSON `json:"engines"`
-	System  systemStatusJSON   `json:"system"`
+	Policy       string             `json:"policy"`
+	Engines      []engineStatusJSON `json:"engines"`
+	System       systemStatusJSON   `json:"system"`
+	LastResultAt int64              `json:"last_result_at"`
+}
+
+// lastResultJSON is the full cached result
+type lastResultJSON struct {
+	ImageBase64   string          `json:"image_base64"`
+	Engine        string          `json:"engine"`
+	AutoRouted    bool            `json:"auto_routed"`
+	PreprocessMs  float32         `json:"preprocess_ms"`
+	InferenceMs   float32         `json:"inference_ms"`
+	PostprocessMs float32         `json:"postprocess_ms"`
+	Detections    []detectionJSON `json:"detections"`
+	TimestampMs   int64           `json:"timestamp_ms"`
 }
 
 // HandleStatus handles GET /status  a lightweight JSON snapshot of
@@ -283,9 +325,16 @@ func (s *Server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		engines = append(engines, engineStatusJSON{Name: es.Name, QueueDepth: es.QueueDepth})
 	}
 	state := s.monitor.Current()
+	s.lastResultMu.RLock()
+	var lastResultAt int64
+	if s.lastResult != nil {
+		lastResultAt = s.lastResult.TimestampMs
+	}
+	s.lastResultMu.RUnlock()
 	out := statusJSON{
-		Policy:  s.policyName,
-		Engines: engines,
+		Policy:       s.policyName,
+		Engines:      engines,
+		LastResultAt: lastResultAt,
 		System: systemStatusJSON{
 			Valid:      state.Valid,
 			MaxTempC:   state.MaxTempC,
