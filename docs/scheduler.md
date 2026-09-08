@@ -22,6 +22,8 @@ The Go control plane is the client-facing side of EdgeSched, it connects to one 
 | **`cmd/sysmonitor_debug`** | Standalone tool to validate `sysmonitor`'s parsing against real device output before trusting it anywhere else. |
 | **`internal/routing.Policy`** | Selects which engine handles a request. `LeastQueuePolicy` (pure load balancing) and `ThermalAwarePolicy` (restricts to a cheap tier once hot) implement it. |
 | **`internal/metrics.Registry`** | Prometheus metrics: imperative counters/histograms for requests and routing, pull-based gauges for queue depth and system state. |
+| **`web.Handler()`** | Serves the embedded dashboard (system state, live charts, predict form, Live Feed panel showing predictions from any source). |
+| **`cmd/loadgen`** | CLI: sends every image in a directory to the scheduler concurrently, reports latency/throughput stats, optional CSV export. |
 
 ---
 
@@ -37,3 +39,87 @@ Eventually a scheduler will be implemented and this is generally how it will wor
 - **`tegrastats`** is run as one long lived subprocess (`--interval 1000`) without needing multiple calls;
 - **`nvpmodel -q`** is polled separately, on a slower 5-second cadence, since power mode changes rarely and doesn't need per
   second freshness;
+
+---
+
+## Dashboard and Load Generation (Phase 5, complete)
+
+### Dashboard (`web/`)
+
+A single static HTML/JS page, embedded directly into the compiled
+scheduler binary via `go:embed` (`web/embed.go`) — no separate directory
+needs to be deployed alongside the binary, and the dashboard can never
+drift out of sync with the server it ships inside.
+
+Served at `/` (Go 1.22's `ServeMux` treats a bare `/` pattern as a
+subtree match, so it only handles requests not claimed by the more
+specific `/predict`, `/health`, `/metrics`, `/status`, `/last-result`
+patterns).
+
+**Two purposes, both from the original plan**:
+- **Passive monitoring** — live system state (temp, power, GPU%, RAM,
+  power mode) and per-engine queue depth, each on a real line chart
+  (Chart.js, vendored locally — see below), polling `GET /status` every
+  second.
+- **Interactive** — a form to send an image directly (with an optional
+  engine override or latency budget), rendering the routed result with
+  bounding boxes drawn client-side on canvas.
+
+**Charting library**: Chart.js 4.5.1, vendored as a minified UMD build
+(`web/static/vendor/chart.umd.min.js`, fetched via `npm pack chart.js@4`
+and copied verbatim from the official package — not hand-rolled or
+modified) rather than loaded from a CDN. This matters specifically
+because the scheduler may be accessed over a private, internet-less
+Ethernet link (as it was during development) — a CDN `<script>` tag
+would silently fail there.
+
+**Styling**: dark background, high-contrast accent color, sharp borders,
+uppercase display text — deliberately chosen, not a default template.
+Two elements considered and explicitly removed after review: a
+custom vendored font (network restrictions during development prevented
+fetching an offline-safe copy, and it wasn't worth the added complexity)
+and a scrolling marquee ticker (added, then cut for being unnecessary
+visual noise on a monitoring tool where clarity matters more than
+flourish). Both are easy to reintroduce later if wanted — the CSS
+variables and structure are already there.
+
+### Live Feed: showing predictions from any source
+
+The dashboard's own predict form can render its own results immediately
+(it has the image bytes right there in the browser). But a request sent
+via `curl` or `loadgen` never touches the browser at all — without
+something extra, the dashboard would have no way to show it.
+
+**Fix**: the server caches the most recently *successful* prediction —
+image bytes (base64-encoded) plus its detections — in memory
+(`Server.lastResult`, guarded by a `sync.RWMutex`), updated inside
+`HandlePredict` regardless of what triggered the request. A new
+`GET /last-result` endpoint serves that cache; `GET /status` gained a
+lightweight `last_result_at` timestamp specifically so the dashboard can
+poll cheaply and only fetch the (larger, image-carrying) `/last-result`
+payload when that timestamp actually changes, rather than
+re-downloading the same image every second regardless of whether
+anything new happened.
+
+This means: open the dashboard, then run a `curl` command or a full
+`loadgen` dataset from a completely different terminal (or a different
+machine on the network) — the image and its boxes appear in the
+dashboard's Live Feed panel automatically, with no interaction on the
+dashboard's own form required.
+
+### Load generation (`cmd/loadgen`)
+
+A CLI tool that sends every image in a directory to the scheduler's
+`/predict` endpoint with configurable client-side concurrency, and
+reports aggregate latency/throughput/success statistics, with optional
+per-request CSV export.
+
+This serves two purposes with the same underlying tool, not two separate
+tools: running a whole dataset through the pipeline conveniently (what it
+was built for, immediately), and characterizing the scheduler under
+concurrent load, the only difference is what
+`-concurrency` value you pass and whether you look at the CSV afterward.
+
+Talks to the **scheduler's HTTP API**, not the C++ gRPC service directly
+— deliberately, so a load test exercises the full path: routing, worker
+pools, admission control, metrics — not just raw inference throughput.
