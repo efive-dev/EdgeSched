@@ -127,6 +127,7 @@ func main() {
 	mux.HandleFunc("POST /predict", server.HandlePredict)
 	mux.HandleFunc("GET /health", server.HandleHealth)
 	mux.HandleFunc("GET /status", server.HandleStatus)
+	mux.HandleFunc("GET /last-result", server.HandleLastResult)
 	mux.Handle("GET /metrics", promhttp.Handler())
 	mux.Handle("/", web.Handler())
 	slog.Info("scheduler listening", "addr", *listenAddr)
