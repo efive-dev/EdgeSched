@@ -184,6 +184,20 @@
     display: none;
     background: var(--muted);
   }
+  #cameraCanvas {
+    max-width: 100%;
+    border: 2px solid var(--border);
+    margin-top: 10px;
+    display: none;
+    background: var(--muted);
+  }
+  #cameraStats {
+    font-family: ui-monospace, "SF Mono", monospace;
+    font-size: 12px;
+    color: var(--muted-fg);
+    margin-top: 10px;
+    line-height: 1.7;
+  }
   #predictResult {
     font-family: ui-monospace, "SF Mono", monospace;
     font-size: 12px;
@@ -257,6 +271,17 @@
       </div>
       <canvas id="resultCanvas"></canvas>
       <div id="predictResult"></div>
+    </div>
+
+    <div class="panel full-width">
+      <h2 class="section-label">Live Camera (Browser Webcam &rarr; Scheduler)</h2>
+      <div class="predict-controls">
+        <select id="cameraEngineSelect"><option value="">(auto)</option></select>
+        <button class="predict-btn" id="cameraToggleBtn" onclick="toggleCamera()">Start Camera</button>
+      </div>
+      <video id="cameraVideo" autoplay playsinline muted style="display:none;"></video>
+      <canvas id="cameraCanvas"></canvas>
+      <div id="cameraStats"></div>
     </div>
 
   </div>
@@ -425,13 +450,9 @@ async function pollStatus() {
       e.name + '</span><span class="engine-queue">' + e.queue_depth + '</span></div>'
     ).join('');
 
-    const select = document.getElementById('engineSelect');
-    const currentNames = Array.from(select.options).map(o => o.value).filter(v => v).join(',');
     const newNames = data.engines.map(e => e.name);
-    if (currentNames !== newNames.join(',')) {
-      select.innerHTML = '<option value="">(auto)</option>' +
-        newNames.map(n => '<option value="' + n + '">' + n.toUpperCase() + '</option>').join('');
-    }
+    refreshEngineSelect(document.getElementById('engineSelect'), newNames);
+    refreshEngineSelect(document.getElementById('cameraEngineSelect'), newNames);
 
     if (data.last_result_at > 0 && data.last_result_at !== lastSeenResultAt) {
       lastSeenResultAt = data.last_result_at;
@@ -501,6 +522,110 @@ function renderResult(file, data, elapsedMs) {
     'detections=' + (data.detections || []).length
   ];
   document.getElementById('predictResult').textContent = lines.join('\n');
+}
+
+function refreshEngineSelect(selectEl, names) {
+  const currentNames = Array.from(selectEl.options).map(o => o.value).filter(v => v).join(',');
+  if (currentNames !== names.join(',')) {
+    selectEl.innerHTML = '<option value="">(auto)</option>' +
+      names.map(n => '<option value="' + n + '">' + n.toUpperCase() + '</option>').join('');
+  }
+}
+
+const CAMERA_SEND_WIDTH = 640;
+let cameraStream = null;
+let cameraRunning = false;
+let cameraFrameCount = 0;
+let cameraFpsWindowStart = 0;
+async function toggleCamera() {
+  if (cameraRunning) {
+    stopCamera();
+    return;
+  }
+
+  try {
+    cameraStream = await navigator.mediaDevices.getUserMedia({ video: true });
+  } catch (e) {
+    alert('Could not access camera: ' + e);
+    return;
+  }
+
+  const video = document.getElementById('cameraVideo');
+  video.srcObject = cameraStream;
+  await video.play();
+
+  document.getElementById('cameraCanvas').style.display = 'block';
+  cameraRunning = true;
+  cameraFrameCount = 0;
+  cameraFpsWindowStart = performance.now();
+  document.getElementById('cameraToggleBtn').textContent = 'Stop Camera';
+
+  cameraLoop();
+}
+
+function stopCamera() {
+  cameraRunning = false;
+  if (cameraStream) {
+    cameraStream.getTracks().forEach(t => t.stop());
+    cameraStream = null;
+  }
+  document.getElementById('cameraToggleBtn').textContent = 'Start Camera';
+}
+
+async function cameraLoop() {
+  const video = document.getElementById('cameraVideo');
+  const captureCanvas = document.createElement('canvas'); // off-screen, never shown
+
+  while (cameraRunning) {
+    if (video.videoWidth === 0) {
+      await new Promise(r => setTimeout(r, 100));
+      continue;
+    }
+
+    const scale = CAMERA_SEND_WIDTH / video.videoWidth;
+    captureCanvas.width = CAMERA_SEND_WIDTH;
+    captureCanvas.height = Math.round(video.videoHeight * scale);
+    captureCanvas.getContext('2d').drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
+
+    const blob = await new Promise(resolve => captureCanvas.toBlob(resolve, 'image/jpeg', 0.7));
+    if (!blob) continue;
+
+    const engine = document.getElementById('cameraEngineSelect').value;
+    const url = '/predict' + (engine ? '?engine=' + encodeURIComponent(engine) : '');
+
+    const t0 = performance.now();
+    let data;
+    try {
+      const resp = await fetch(url, { method: 'POST', body: blob });
+      if (!resp.ok) {
+        const text = await resp.text();
+        document.getElementById('cameraStats').textContent = 'ERROR ' + resp.status + ': ' + text;
+        await new Promise(r => setTimeout(r, 300));
+        continue;
+      }
+      data = await resp.json();
+    } catch (e) {
+      document.getElementById('cameraStats').textContent = 'REQUEST FAILED: ' + e;
+      await new Promise(r => setTimeout(r, 300));
+      continue;
+    }
+    const roundTripMs = performance.now() - t0;
+
+    const displayCanvas = document.getElementById('cameraCanvas');
+    displayCanvas.width = captureCanvas.width;
+    displayCanvas.height = captureCanvas.height;
+    drawDetections(displayCanvas.getContext('2d'), captureCanvas, data.detections);
+
+    cameraFrameCount++;
+    const elapsedSec = (performance.now() - cameraFpsWindowStart) / 1000;
+    const fps = cameraFrameCount / elapsedSec;
+
+    document.getElementById('cameraStats').textContent =
+      'ENGINE=' + data.engine.toUpperCase() +
+      '  ROUND_TRIP=' + roundTripMs.toFixed(0) + 'ms' +
+      '  AVG_FPS=' + fps.toFixed(1) +
+      '  DETECTIONS=' + (data.detections || []).length;
+  }
 }
 </script>
 
