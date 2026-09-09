@@ -123,3 +123,30 @@ concurrent load, the only difference is what
 Talks to the **scheduler's HTTP API**, not the C++ gRPC service directly
 — deliberately, so a load test exercises the full path: routing, worker
 pools, admission control, metrics — not just raw inference throughput.
+
+---
+
+## Live Camera Feed
+"Start Camera" button that captures the
+**dashboard viewer's own webcam** (typically a laptop browsing the
+dashboard, not a camera physically attached to the Jetson) and streams
+frames through the existing `/predict` endpoint, drawing results back in
+real time
+
+### Design choices
+
+- **Self throttling loop.** The next frame is
+  captured and sent only after the previous request's response has been
+  received and rendered.
+- **Frames downscaled to 640px wide before sending.**
+
+NB:
+
+- **Secure-context requirement**: browsers restrict `getUserMedia` to
+  HTTPS or `localhost`/`127.0.0.1` origins. Accessing the dashboard as
+  `http://<jetson-ip>:8080` from another machine may be blocked outright
+  depending on browser policy. Workaround used during testing: SSH
+  port-forwarding (`ssh -L 8080:localhost:8080 orin@<jetson-ip>`) so the
+  browser sees `localhost`.
+- **No routing-policy hot-reload.** Policy is read once from flags at
+  process start; changing it requires restarting the scheduler process.
