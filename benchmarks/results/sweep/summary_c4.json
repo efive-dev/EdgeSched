@@ -1,0 +1,18 @@
+{
+  "label": "c4",
+  "concurrency": 4,
+  "duration_sec": 20.045370015,
+  "total": 1739,
+  "succeeded": 1739,
+  "failed": 0,
+  "throughput_rps": 86.75320030005443,
+  "latency_p50_ms": 45.275,
+  "latency_p95_ms": 59.125,
+  "latency_p99_ms": 64.752,
+  "latency_max_ms": 76.732,
+  "engine_counts": {
+    "yolo26m_fp16": 870,
+    "yolo26n_int8": 869
+  },
+  "status_counts": {}
+}

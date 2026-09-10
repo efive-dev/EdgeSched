@@ -1,0 +1,8 @@
+{
+  "label": "least_queue",
+  "start_time_utc": "2026-09-10T07:27:16Z",
+  "start_temp_c": 51.218,
+  "duration": "5m",
+  "concurrency": 16,
+  "addr": "http://localhost:8080"
+}

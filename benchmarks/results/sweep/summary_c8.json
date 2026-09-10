@@ -1,0 +1,18 @@
+{
+  "label": "c8",
+  "concurrency": 8,
+  "duration_sec": 20.08759025,
+  "total": 2230,
+  "succeeded": 2230,
+  "failed": 0,
+  "throughput_rps": 111.01381361559781,
+  "latency_p50_ms": 50.746,
+  "latency_p95_ms": 121.292,
+  "latency_p99_ms": 138.565,
+  "latency_max_ms": 180.446,
+  "engine_counts": {
+    "yolo26m_fp16": 857,
+    "yolo26n_int8": 1373
+  },
+  "status_counts": {}
+}

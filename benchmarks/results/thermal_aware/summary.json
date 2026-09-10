@@ -1,0 +1,18 @@
+{
+  "label": "thermal_aware",
+  "concurrency": 16,
+  "duration_sec": 300.142479712,
+  "total": 34040,
+  "succeeded": 34040,
+  "failed": 0,
+  "throughput_rps": 113.41280325485045,
+  "latency_p50_ms": 140.739,
+  "latency_p95_ms": 153.254,
+  "latency_p99_ms": 191.984,
+  "latency_max_ms": 326.696,
+  "engine_counts": {
+    "yolo26m_fp16": 373,
+    "yolo26n_int8": 33667
+  },
+  "status_counts": {}
+}

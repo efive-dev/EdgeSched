@@ -1,0 +1,8 @@
+{
+  "label": "thermal_aware",
+  "start_time_utc": "2026-09-10T07:10:56Z",
+  "start_temp_c": 50.656,
+  "duration": "5m",
+  "concurrency": 16,
+  "addr": "http://localhost:8080"
+}
