@@ -38,11 +38,30 @@ type predictResponse struct {
 }
 
 type result struct {
-	Path       string
-	StatusCode int
-	Err        error
-	WallMs     float64
-	Resp       predictResponse
+	Path        string
+	StatusCode  int
+	Err         error
+	WallMs      float64
+	TimestampMs int64 // completion time (unix ms)
+	Resp        predictResponse
+}
+
+// summaryJSON is written to -summary-json for automated aggregation
+// across many runs
+type summaryJSON struct {
+	Label         string         `json:"label,omitempty"`
+	Concurrency   int            `json:"concurrency"`
+	DurationSec   float64        `json:"duration_sec"`
+	Total         int            `json:"total"`
+	Succeeded     int            `json:"succeeded"`
+	Failed        int            `json:"failed"`
+	ThroughputRPS float64        `json:"throughput_rps"`
+	LatencyP50Ms  float64        `json:"latency_p50_ms"`
+	LatencyP95Ms  float64        `json:"latency_p95_ms"`
+	LatencyP99Ms  float64        `json:"latency_p99_ms"`
+	LatencyMaxMs  float64        `json:"latency_max_ms"`
+	EngineCounts  map[string]int `json:"engine_counts"`
+	StatusCounts  map[string]int `json:"status_counts"` // string keys: JSON object keys can't be ints
 }
 
 // findImages is pure I/O but no network/HTTP
@@ -90,31 +109,32 @@ func percentile(sorted []float64, p float64) float64 {
 func sendOne(client *http.Client, baseURL, path, engine string, budgetMs int) result {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return result{Path: path, Err: fmt.Errorf("read file: %w", err)}
+		return result{Path: path, Err: fmt.Errorf("read file: %w", err), TimestampMs: time.Now().UnixMilli()}
 	}
 	url := buildPredictURL(baseURL, engine, budgetMs)
 	start := time.Now()
 	resp, err := client.Post(url, "application/octet-stream", bytes.NewReader(data))
 	wallMs := float64(time.Since(start).Microseconds()) / 1000.0
+	completedAt := time.Now().UnixMilli() // captured once, used for every return path below
 	if err != nil {
-		return result{Path: path, Err: err, WallMs: wallMs}
+		return result{Path: path, Err: err, WallMs: wallMs, TimestampMs: completedAt}
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return result{
-			Path: path, StatusCode: resp.StatusCode, WallMs: wallMs,
+			Path: path, StatusCode: resp.StatusCode, WallMs: wallMs, TimestampMs: completedAt,
 			Err: fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body))),
 		}
 	}
 	var pr predictResponse
 	if err := json.Unmarshal(body, &pr); err != nil {
 		return result{
-			Path: path, StatusCode: resp.StatusCode, WallMs: wallMs,
+			Path: path, StatusCode: resp.StatusCode, WallMs: wallMs, TimestampMs: completedAt,
 			Err: fmt.Errorf("decode response: %w", err),
 		}
 	}
-	return result{Path: path, StatusCode: resp.StatusCode, WallMs: wallMs, Resp: pr}
+	return result{Path: path, StatusCode: resp.StatusCode, WallMs: wallMs, TimestampMs: completedAt, Resp: pr}
 }
 
 func writeCSV(path string, results []result) error {
@@ -126,7 +146,7 @@ func writeCSV(path string, results []result) error {
 	w := csv.NewWriter(f)
 	defer w.Flush()
 	w.Write([]string{
-		"path", "status_code", "error", "wall_ms", "engine", "auto_routed",
+		"path", "timestamp_ms", "status_code", "error", "wall_ms", "engine", "auto_routed",
 		"preprocess_ms", "inference_ms", "postprocess_ms", "num_detections",
 	})
 	for _, r := range results {
@@ -136,6 +156,7 @@ func writeCSV(path string, results []result) error {
 		}
 		w.Write([]string{
 			r.Path,
+			strconv.FormatInt(r.TimestampMs, 10),
 			strconv.Itoa(r.StatusCode),
 			errStr,
 			fmt.Sprintf("%.2f", r.WallMs),
@@ -158,6 +179,13 @@ func main() {
 	concurrency := flag.Int("concurrency", 4, "number of concurrent in-flight requests")
 	timeoutSec := flag.Int("timeout-sec", 60, "HTTP client timeout per request, in seconds")
 	outCSV := flag.String("out", "", "optional path to write per-request results as CSV")
+	summaryJSONPath := flag.String("summary-json", "", "optional path to write a machine-readable summary JSON")
+	label := flag.String("label", "", "optional label included in the summary JSON (e.g. a policy name or concurrency level)")
+	duration := flag.Duration("duration", 0,
+		"if >0, cycle through -dir repeatedly for this long instead of sending each image once "+
+			"(e.g. -duration=5m). Sustained mode, for steady-state benchmarking.")
+	warmup := flag.Int("warmup", 0,
+		"send this many requests first, sequentially, discarded from stats -- skips past cold-start effects")
 	flag.Parse()
 	if *dir == "" {
 		log.Fatal("must specify -dir")
@@ -169,23 +197,46 @@ func main() {
 	if len(paths) == 0 {
 		log.Fatalf("no images found in %s (looked for .jpg/.jpeg/.png/.bmp)", *dir)
 	}
-	fmt.Printf("Found %d images in %s\n", len(paths), *dir)
-	fmt.Printf("Sending with concurrency=%d to %s (engine=%q, budget=%dms)\n\n",
-		*concurrency, *addr, *engine, *budgetMs)
 	client := &http.Client{Timeout: time.Duration(*timeoutSec) * time.Second}
-	sem := make(chan struct{}, *concurrency)
-	resultsCh := make(chan result, len(paths))
-	var wg sync.WaitGroup
-	overallStart := time.Now()
-	for _, p := range paths {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(path string) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			resultsCh <- sendOne(client, *addr, path, *engine, *budgetMs)
-		}(p)
+	if *warmup > 0 {
+		fmt.Printf("Warming up with %d requests (discarded from stats)...\n", *warmup)
+		for i := 0; i < *warmup; i++ {
+			sendOne(client, *addr, paths[i%len(paths)], *engine, *budgetMs)
+		}
 	}
+	mode := "one-pass"
+	if *duration > 0 {
+		mode = "sustained, " + duration.String()
+	}
+	fmt.Printf("Found %d images in %s\n", len(paths), *dir)
+	fmt.Printf("Mode: %s | concurrency=%d | addr=%s | engine=%q | budget=%dms\n\n",
+		mode, *concurrency, *addr, *engine, *budgetMs)
+	pathsCh := make(chan string)
+	resultsCh := make(chan result)
+	var wg sync.WaitGroup
+	for i := 0; i < *concurrency; i++ {
+		wg.Go(func() {
+			for p := range pathsCh {
+				resultsCh <- sendOne(client, *addr, p, *engine, *budgetMs)
+			}
+		})
+	}
+	overallStart := time.Now()
+	go func() {
+		defer close(pathsCh)
+		if *duration > 0 {
+			deadline := overallStart.Add(*duration)
+			idx := 0
+			for time.Now().Before(deadline) {
+				pathsCh <- paths[idx%len(paths)]
+				idx++
+			}
+		} else {
+			for _, p := range paths {
+				pathsCh <- p
+			}
+		}
+	}()
 	go func() {
 		wg.Wait()
 		close(resultsCh)
@@ -195,8 +246,8 @@ func main() {
 	for r := range resultsCh {
 		results = append(results, r)
 		completed++
-		if completed%50 == 0 || completed == len(paths) {
-			fmt.Printf("\r%d/%d completed", completed, len(paths))
+		if completed%50 == 0 {
+			fmt.Printf("\r%d completed (%.0fs elapsed)", completed, time.Since(overallStart).Seconds())
 		}
 	}
 	fmt.Println()
@@ -217,18 +268,24 @@ func main() {
 		engineCounts[r.Resp.Engine]++
 	}
 	sort.Float64s(wallTimes)
+	throughput := float64(len(results)) / overallElapsed.Seconds()
 	fmt.Println("\n=== Summary ===")
 	fmt.Printf("Total:      %d\n", len(results))
 	fmt.Printf("Succeeded:  %d\n", successCount)
 	fmt.Printf("Failed:     %d\n", failCount)
 	fmt.Printf("Wall time:  %.1fs\n", overallElapsed.Seconds())
-	fmt.Printf("Throughput: %.2f images/sec\n", float64(len(results))/overallElapsed.Seconds())
+	fmt.Printf("Throughput: %.2f req/sec\n", throughput)
+	var p50, p95, p99, maxMs float64
 	if len(wallTimes) > 0 {
+		p50 = percentile(wallTimes, 50)
+		p95 = percentile(wallTimes, 95)
+		p99 = percentile(wallTimes, 99)
+		maxMs = wallTimes[len(wallTimes)-1]
 		fmt.Println("\nClient-observed round-trip latency (ms):")
-		fmt.Printf("  p50: %.1f\n", percentile(wallTimes, 50))
-		fmt.Printf("  p95: %.1f\n", percentile(wallTimes, 95))
-		fmt.Printf("  p99: %.1f\n", percentile(wallTimes, 99))
-		fmt.Printf("  max: %.1f\n", wallTimes[len(wallTimes)-1])
+		fmt.Printf("  p50: %.1f\n", p50)
+		fmt.Printf("  p95: %.1f\n", p95)
+		fmt.Printf("  p99: %.1f\n", p99)
+		fmt.Printf("  max: %.1f\n", maxMs)
 	}
 	if len(engineCounts) > 0 {
 		fmt.Println("\nRequests by engine:")
@@ -257,6 +314,40 @@ func main() {
 			log.Printf("failed to write CSV: %v", err)
 		} else {
 			fmt.Printf("\nPer-request results written to %s\n", *outCSV)
+		}
+	}
+	if *summaryJSONPath != "" {
+		statusCountsStr := make(map[string]int, len(statusCounts))
+		for code, n := range statusCounts {
+			statusCountsStr[strconv.Itoa(code)] = n
+		}
+		summary := summaryJSON{
+			Label:         *label,
+			Concurrency:   *concurrency,
+			DurationSec:   overallElapsed.Seconds(),
+			Total:         len(results),
+			Succeeded:     successCount,
+			Failed:        failCount,
+			ThroughputRPS: throughput,
+			LatencyP50Ms:  p50,
+			LatencyP95Ms:  p95,
+			LatencyP99Ms:  p99,
+			LatencyMaxMs:  maxMs,
+			EngineCounts:  engineCounts,
+			StatusCounts:  statusCountsStr,
+		}
+		f, err := os.Create(*summaryJSONPath)
+		if err != nil {
+			log.Printf("failed to create %s: %v", *summaryJSONPath, err)
+		} else {
+			defer f.Close()
+			enc := json.NewEncoder(f)
+			enc.SetIndent("", "  ")
+			if err := enc.Encode(summary); err != nil {
+				log.Printf("failed to write summary JSON: %v", err)
+			} else {
+				fmt.Printf("Summary JSON written to %s\n", *summaryJSONPath)
+			}
 		}
 	}
 }
