@@ -24,6 +24,7 @@ The Go control plane is the client-facing side of EdgeSched, it connects to one 
 | **`internal/metrics.Registry`** | Prometheus metrics: imperative counters/histograms for requests and routing, pull-based gauges for queue depth and system state. |
 | **`web.Handler()`** | Serves the embedded dashboard (system state, live charts, predict form, Live Feed panel showing predictions from any source). |
 | **`cmd/loadgen`** | CLI: sends every image in a directory to the scheduler concurrently, reports latency/throughput stats, optional CSV export. |
+| **`internal/healthcheck.Monitor`** | Polls each engine's `HealthCheck` RPC in the background; both routing policies exclude unhealthy engines automatically. |
 
 ---
 
@@ -42,7 +43,7 @@ Eventually a scheduler will be implemented and this is generally how it will wor
 
 ---
 
-## Dashboard and Load Generation (Phase 5, complete)
+## Dashboard and Load Generation 
 
 ### Dashboard (`web/`)
 
@@ -150,3 +151,30 @@ NB:
   browser sees `localhost`.
 - **No routing-policy hot-reload.** Policy is read once from flags at
   process start; changing it requires restarting the scheduler process.
+
+## Health Monitoring and Failure Recovery
+
+### Design
+
+`internal/healthcheck.Monitor` polls every engine's `HealthCheck` RPC
+independently, on its own goroutine, at a configurable interval
+(`-health-check-interval`, default 3s) with a configurable per-check timeout
+(`-health-check-timeout`, default 2s). Tracks per-engine `healthy` state
+behind a `sync.RWMutex`.
+- **Assumed healthy at startup**, avoids a window where
+  nothing is routable before the first poll completes. Each engine's first
+  check happens immediately when `Run` starts, not after waiting a full
+  interval, keeping that theoretical window small regardless.
+- **`Checker` interface**, not a direct dependency on `*engineclient.Client`
+  — same pattern as `workerpool.Predictor`: lets the polling/status logic be
+  tested against a fake, no real gRPC connection required.
+- **`serving=false` (no error) is treated identically to a transport
+  error**
+
+### Routing integration
+
+`routing.EngineState` gained a `Healthy` field. Both `LeastQueuePolicy` and
+`ThermalAwarePolicy` filter to healthy engines **first**, before any
+queue depth or thermal logic runs,  there's no scenario where routing to a
+known dead engine is the right answer, so this filtering happens
+unconditionally rather than being a policy specific choice.
