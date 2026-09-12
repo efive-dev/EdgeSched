@@ -22,6 +22,7 @@ type Request struct {
 type EngineState struct {
 	Name       string
 	QueueDepth int
+	Healthy    bool
 }
 
 // Policy selects which engine should handle a request
@@ -29,8 +30,17 @@ type Policy interface {
 	SelectEngine(req Request, sys sysmonitor.State, engines []EngineState) (string, error)
 }
 
-// tieBreaker round robins deterministically among engines tied for the
-// lowest queue depth
+// filterHealthy returns only the engines currently reporting healthy
+func filterHealthy(engines []EngineState) []EngineState {
+	out := make([]EngineState, 0, len(engines))
+	for _, e := range engines {
+		if e.Healthy {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 type tieBreaker struct {
 	counter atomic.Uint64
 }
@@ -65,7 +75,11 @@ type LeastQueuePolicy struct {
 }
 
 func (p *LeastQueuePolicy) SelectEngine(_ Request, _ sysmonitor.State, engines []EngineState) (string, error) {
-	return p.tb.pick(engines)
+	healthy := filterHealthy(engines)
+	if len(healthy) == 0 {
+		return "", fmt.Errorf("no healthy engines available")
+	}
+	return p.tb.pick(healthy)
 }
 
 // ThermalAwarePolicy load-balances across all engines like
@@ -80,12 +94,13 @@ type ThermalAwarePolicy struct {
 }
 
 func (p *ThermalAwarePolicy) SelectEngine(_ Request, sys sysmonitor.State, engines []EngineState) (string, error) {
-	if len(engines) == 0 {
-		return "", fmt.Errorf("no engines available")
+	healthy := filterHealthy(engines)
+	if len(healthy) == 0 {
+		return "", fmt.Errorf("no healthy engines available")
 	}
-	candidates := engines
+	candidates := healthy
 	if sys.Valid && sys.MaxTempC >= p.TempThresholdC {
-		if filtered := filterToCheapTier(engines, p.Tiers, p.CheapTierCount); len(filtered) > 0 {
+		if filtered := filterToCheapTier(healthy, p.Tiers, p.CheapTierCount); len(filtered) > 0 {
 			candidates = filtered
 		}
 	}

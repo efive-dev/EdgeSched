@@ -30,7 +30,6 @@ func TestParseLatencyBudget_ParsesValidValue(t *testing.T) {
 
 func TestParseLatencyBudget_ClampsToMax(t *testing.T) {
 	r := httptest.NewRequest("POST", "/predict?latency_budget_ms=999999", nil)
-
 	got, err := parseLatencyBudget(r, 2*time.Second)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

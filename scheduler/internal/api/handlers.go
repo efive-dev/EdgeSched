@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"edgesched/scheduler/internal/engineclient"
+	"edgesched/scheduler/internal/healthcheck"
 	"edgesched/scheduler/internal/metrics"
 	"edgesched/scheduler/internal/routing"
 	"edgesched/scheduler/internal/sysmonitor"
@@ -22,11 +23,25 @@ import (
 )
 
 const defaultLatencyBudget = 10 * time.Second
+const maxImageBytes = 20 << 20 // 20MB
+
+// ServerConfig groups everything NewServer needs
+type ServerConfig struct {
+	Clients          map[string]*engineclient.Client
+	Pools            map[string]*workerpool.Pool
+	Monitor          *sysmonitor.Monitor
+	HealthMonitor    *healthcheck.Monitor
+	Policy           routing.Policy
+	PolicyName       string
+	MaxLatencyBudget time.Duration
+	Metrics          *metrics.Registry
+}
 
 type Server struct {
 	clients          map[string]*engineclient.Client
 	pools            map[string]*workerpool.Pool
 	monitor          *sysmonitor.Monitor
+	healthMonitor    *healthcheck.Monitor
 	policy           routing.Policy
 	policyName       string
 	metrics          *metrics.Registry
@@ -37,23 +52,16 @@ type Server struct {
 	lastResult   *lastResultJSON
 }
 
-func NewServer(
-	clients map[string]*engineclient.Client,
-	pools map[string]*workerpool.Pool,
-	monitor *sysmonitor.Monitor,
-	policy routing.Policy,
-	policyName string,
-	maxLatencyBudget time.Duration,
-	metricsRegistry *metrics.Registry,
-) *Server {
+func NewServer(cfg ServerConfig) *Server {
 	return &Server{
-		clients:          clients,
-		pools:            pools,
-		monitor:          monitor,
-		policy:           policy,
-		policyName:       policyName,
-		metrics:          metricsRegistry,
-		maxLatencyBudget: maxLatencyBudget,
+		clients:          cfg.Clients,
+		pools:            cfg.Pools,
+		monitor:          cfg.Monitor,
+		healthMonitor:    cfg.HealthMonitor,
+		policy:           cfg.Policy,
+		policyName:       cfg.PolicyName,
+		metrics:          cfg.Metrics,
+		maxLatencyBudget: cfg.MaxLatencyBudget,
 	}
 }
 
@@ -78,7 +86,39 @@ type predictResponseJSON struct {
 	LatencyBudgetMs int64           `json:"latency_budget_ms"`
 }
 
-const maxImageBytes = 20 << 20 // 20MB
+type engineStatusJSON struct {
+	Name       string `json:"name"`
+	QueueDepth int    `json:"queue_depth"`
+	Healthy    bool   `json:"healthy"`
+}
+
+type systemStatusJSON struct {
+	Valid      bool    `json:"valid"`
+	MaxTempC   float64 `json:"max_temp_c"`
+	PowerMW    float64 `json:"power_mw"`
+	GPUUtilPct float64 `json:"gpu_util_pct"`
+	RAMUsedMB  int     `json:"ram_used_mb"`
+	RAMTotalMB int     `json:"ram_total_mb"`
+	PowerMode  string  `json:"power_mode"`
+}
+
+type statusJSON struct {
+	Policy       string             `json:"policy"`
+	Engines      []engineStatusJSON `json:"engines"`
+	System       systemStatusJSON   `json:"system"`
+	LastResultAt int64              `json:"last_result_at"`
+}
+
+type lastResultJSON struct {
+	ImageBase64   string          `json:"image_base64"`
+	Engine        string          `json:"engine"`
+	AutoRouted    bool            `json:"auto_routed"`
+	PreprocessMs  float32         `json:"preprocess_ms"`
+	InferenceMs   float32         `json:"inference_ms"`
+	PostprocessMs float32         `json:"postprocess_ms"`
+	Detections    []detectionJSON `json:"detections"`
+	TimestampMs   int64           `json:"timestamp_ms"`
+}
 
 // parseLatencyBudget reads latency_budget_ms from the query string
 func parseLatencyBudget(r *http.Request, maxBudget time.Duration) (time.Duration, error) {
@@ -90,7 +130,10 @@ func parseLatencyBudget(r *http.Request, maxBudget time.Duration) (time.Duration
 	if err != nil || ms <= 0 {
 		return 0, fmt.Errorf("invalid latency_budget_ms: %q (must be a positive integer)", raw)
 	}
-	budget := min(time.Duration(ms)*time.Millisecond, maxBudget)
+	budget := time.Duration(ms) * time.Millisecond
+	if budget > maxBudget {
+		budget = maxBudget
+	}
 	return budget, nil
 }
 
@@ -99,14 +142,24 @@ func parseLatencyBudget(r *http.Request, maxBudget time.Duration) (time.Duration
 func (s *Server) engineStates() []routing.EngineState {
 	states := make([]routing.EngineState, 0, len(s.pools))
 	for name, pool := range s.pools {
-		states = append(states, routing.EngineState{Name: name, QueueDepth: pool.QueueDepth()})
+		states = append(states, routing.EngineState{
+			Name:       name,
+			QueueDepth: pool.QueueDepth(),
+			Healthy:    s.healthMonitor.Healthy(name),
+		})
 	}
 	return states
 }
 
+func boolLabel(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
+}
+
 // HandlePredict handles POST /predict, optionally with ?engine=<name>
-// (manual override) and/or ?latency_budget_ms=<n> (client-specified
-// deadline, also passed to the routing policy)
+// (manual override) and/or ?latency_budget_ms=<n>.
 func (s *Server) HandlePredict(w http.ResponseWriter, r *http.Request) {
 	requestStart := time.Now()
 	status := "unknown"
@@ -133,6 +186,7 @@ func (s *Server) HandlePredict(w http.ResponseWriter, r *http.Request) {
 		selected, err := s.policy.SelectEngine(routingReq, sysState, s.engineStates())
 		if err != nil {
 			status = "routing_failed"
+			slog.Error("routing failed", "error", err)
 			http.Error(w, "routing failed: "+err.Error(), http.StatusServiceUnavailable)
 			return
 		}
@@ -143,8 +197,13 @@ func (s *Server) HandlePredict(w http.ResponseWriter, r *http.Request) {
 			"system_temp_c", sysState.MaxTempC,
 			"system_state_valid", sysState.Valid,
 		)
+	} else if !s.healthMonitor.Healthy(engineName) {
+		status = "engine_unhealthy"
+		slog.Warn("rejected request for unhealthy engine", "engine", engineName)
+		http.Error(w, fmt.Sprintf("engine %q is currently unhealthy", engineName),
+			http.StatusServiceUnavailable)
+		return
 	}
-	s.metrics.RoutingDecisions.WithLabelValues(engineName, boolLabel(autoRouted)).Inc()
 	pool, ok := s.pools[engineName]
 	if !ok {
 		status = "bad_request"
@@ -259,61 +318,6 @@ func (s *Server) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func boolLabel(b bool) string {
-	if b {
-		return "true"
-	}
-	return "false"
-}
-
-// HandleLastResult handles GET /last-result, returns the most
-// recently successfully processed image (base64) plus its detections
-func (s *Server) HandleLastResult(w http.ResponseWriter, r *http.Request) {
-	s.lastResultMu.RLock()
-	result := s.lastResult
-	s.lastResultMu.RUnlock()
-	if result == nil {
-		http.Error(w, "no successful predictions yet", http.StatusNotFound)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
-}
-
-type engineStatusJSON struct {
-	Name       string `json:"name"`
-	QueueDepth int    `json:"queue_depth"`
-}
-
-type systemStatusJSON struct {
-	Valid      bool    `json:"valid"`
-	MaxTempC   float64 `json:"max_temp_c"`
-	PowerMW    float64 `json:"power_mw"`
-	GPUUtilPct float64 `json:"gpu_util_pct"`
-	RAMUsedMB  int     `json:"ram_used_mb"`
-	RAMTotalMB int     `json:"ram_total_mb"`
-	PowerMode  string  `json:"power_mode"`
-}
-
-type statusJSON struct {
-	Policy       string             `json:"policy"`
-	Engines      []engineStatusJSON `json:"engines"`
-	System       systemStatusJSON   `json:"system"`
-	LastResultAt int64              `json:"last_result_at"`
-}
-
-// lastResultJSON is the full cached result
-type lastResultJSON struct {
-	ImageBase64   string          `json:"image_base64"`
-	Engine        string          `json:"engine"`
-	AutoRouted    bool            `json:"auto_routed"`
-	PreprocessMs  float32         `json:"preprocess_ms"`
-	InferenceMs   float32         `json:"inference_ms"`
-	PostprocessMs float32         `json:"postprocess_ms"`
-	Detections    []detectionJSON `json:"detections"`
-	TimestampMs   int64           `json:"timestamp_ms"`
-}
-
 // HandleStatus handles GET /status  a lightweight JSON snapshot of
 // live queue/system state, purpose-built for the dashboard (web/) to
 // poll
@@ -322,7 +326,9 @@ func (s *Server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(rawStates, func(i, j int) bool { return rawStates[i].Name < rawStates[j].Name })
 	engines := make([]engineStatusJSON, 0, len(rawStates))
 	for _, es := range rawStates {
-		engines = append(engines, engineStatusJSON{Name: es.Name, QueueDepth: es.QueueDepth})
+		engines = append(engines, engineStatusJSON{
+			Name: es.Name, QueueDepth: es.QueueDepth, Healthy: es.Healthy,
+		})
 	}
 	state := s.monitor.Current()
 	s.lastResultMu.RLock()
@@ -347,4 +353,18 @@ func (s *Server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(out)
+}
+
+// HandleLastResult handles GET /last-result, returns the most
+// recently successfully processed image (base64) plus its detections
+func (s *Server) HandleLastResult(w http.ResponseWriter, r *http.Request) {
+	s.lastResultMu.RLock()
+	result := s.lastResult
+	s.lastResultMu.RUnlock()
+	if result == nil {
+		http.Error(w, "no successful predictions yet", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
 }

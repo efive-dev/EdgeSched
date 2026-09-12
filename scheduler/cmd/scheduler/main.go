@@ -15,6 +15,7 @@ import (
 
 	"edgesched/scheduler/internal/api"
 	"edgesched/scheduler/internal/engineclient"
+	"edgesched/scheduler/internal/healthcheck"
 	"edgesched/scheduler/internal/metrics"
 	"edgesched/scheduler/internal/routing"
 	"edgesched/scheduler/internal/sysmonitor"
@@ -87,6 +88,11 @@ func main() {
 		"how many of the leading cheap-tier engines stay eligible when hot")
 	maxLatencyBudgetMs := flag.Int64("max-latency-budget-ms", 30000,
 		"upper bound on any client-requested latency_budget_ms")
+
+	healthCheckInterval := flag.Duration("health-check-interval", 3*time.Second,
+		"how often to poll each engine's HealthCheck RPC in the background")
+	healthCheckTimeout := flag.Duration("health-check-timeout", 2*time.Second,
+		"per-check timeout for the background health poll")
 	flag.Parse()
 	if *enginesFlag == "" {
 		log.Fatal("must specify -engines")
@@ -119,10 +125,21 @@ func main() {
 			slog.Error("sysmonitor stopped", "error", err)
 		}
 	}()
+	healthMonitor := healthcheck.New(clients, *healthCheckInterval, *healthCheckTimeout)
+	go healthMonitor.Run(context.Background())
+	slog.Info("health monitor started", "interval", *healthCheckInterval, "timeout", *healthCheckTimeout)
 	metricsRegistry := metrics.New(pools, monitor)
 	metricsRegistry.MustRegister(prometheus.DefaultRegisterer)
-	server := api.NewServer(clients, pools, monitor, policy, *policyName,
-		time.Duration(*maxLatencyBudgetMs)*time.Millisecond, metricsRegistry)
+	server := api.NewServer(api.ServerConfig{
+		Clients:          clients,
+		Pools:            pools,
+		Monitor:          monitor,
+		HealthMonitor:    healthMonitor,
+		Policy:           policy,
+		PolicyName:       *policyName,
+		MaxLatencyBudget: time.Duration(*maxLatencyBudgetMs) * time.Millisecond,
+		Metrics:          metricsRegistry,
+	})
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /predict", server.HandlePredict)
 	mux.HandleFunc("GET /health", server.HandleHealth)

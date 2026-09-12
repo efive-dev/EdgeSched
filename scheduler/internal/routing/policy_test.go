@@ -9,9 +9,9 @@ import (
 func TestLeastQueuePolicy_PicksLowestQueueDepth(t *testing.T) {
 	policy := &LeastQueuePolicy{}
 	engines := []EngineState{
-		{Name: "a", QueueDepth: 5},
-		{Name: "b", QueueDepth: 1},
-		{Name: "c", QueueDepth: 3},
+		{Name: "a", QueueDepth: 5, Healthy: true},
+		{Name: "b", QueueDepth: 1, Healthy: true},
+		{Name: "c", QueueDepth: 3, Healthy: true},
 	}
 
 	name, err := policy.SelectEngine(Request{}, sysmonitor.State{}, engines)
@@ -31,16 +31,11 @@ func TestLeastQueuePolicy_ErrorsOnNoEngines(t *testing.T) {
 	}
 }
 
-// This is the test that would have caught the map-iteration-order bug:
-// with two engines genuinely tied, repeated calls must alternate between
-// them in a deterministic, sorted-name-based round-robin -- not favor one
-// arbitrarily based on the order the caller's slice happened to be built
-// in (e.g. from ranging over a map).
 func TestLeastQueuePolicy_RoundRobinsFairlyAmongTies(t *testing.T) {
 	policy := &LeastQueuePolicy{}
 	engines := []EngineState{
-		{Name: "yolo26m_fp16", QueueDepth: 0},
-		{Name: "yolo26n_int8", QueueDepth: 0},
+		{Name: "yolo26m_fp16", QueueDepth: 0, Healthy: true},
+		{Name: "yolo26n_int8", QueueDepth: 0, Healthy: true},
 	}
 
 	counts := map[string]int{}
@@ -59,14 +54,11 @@ func TestLeastQueuePolicy_RoundRobinsFairlyAmongTies(t *testing.T) {
 }
 
 func TestLeastQueuePolicy_RoundRobinIsDeterministicSequence(t *testing.T) {
-	// Sorted alphabetically: a, b, c. With all three tied, the sequence
-	// should cycle a, b, c, a, b, c, ... regardless of the input slice's
-	// order.
 	policy := &LeastQueuePolicy{}
 	engines := []EngineState{
-		{Name: "c", QueueDepth: 0},
-		{Name: "a", QueueDepth: 0},
-		{Name: "b", QueueDepth: 0},
+		{Name: "c", QueueDepth: 0, Healthy: true},
+		{Name: "a", QueueDepth: 0, Healthy: true},
+		{Name: "b", QueueDepth: 0, Healthy: true},
 	}
 
 	want := []string{"a", "b", "c", "a", "b", "c"}
@@ -82,11 +74,10 @@ func TestLeastQueuePolicy_RoundRobinIsDeterministicSequence(t *testing.T) {
 }
 
 func TestLeastQueuePolicy_NoRoundRobinWhenNotTied(t *testing.T) {
-	// A clear winner should be picked every time, not cycled through.
 	policy := &LeastQueuePolicy{}
 	engines := []EngineState{
-		{Name: "a", QueueDepth: 5},
-		{Name: "b", QueueDepth: 1}, // strictly lowest, never tied
+		{Name: "a", QueueDepth: 5, Healthy: true},
+		{Name: "b", QueueDepth: 1, Healthy: true},
 	}
 
 	for i := 0; i < 10; i++ {
@@ -100,6 +91,36 @@ func TestLeastQueuePolicy_NoRoundRobinWhenNotTied(t *testing.T) {
 	}
 }
 
+func TestLeastQueuePolicy_ExcludesUnhealthyEngines(t *testing.T) {
+	policy := &LeastQueuePolicy{}
+	engines := []EngineState{
+		{Name: "a", QueueDepth: 0, Healthy: false}, // lowest queue depth, but dead
+		{Name: "b", QueueDepth: 5, Healthy: true},
+	}
+
+	name, err := policy.SelectEngine(Request{}, sysmonitor.State{}, engines)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if name != "b" {
+		t.Errorf("got %q, want %q -- must never route to an unhealthy engine "+
+			"even if it has the lowest queue depth", name, "b")
+	}
+}
+
+func TestLeastQueuePolicy_ErrorsWhenAllUnhealthy(t *testing.T) {
+	policy := &LeastQueuePolicy{}
+	engines := []EngineState{
+		{Name: "a", QueueDepth: 0, Healthy: false},
+		{Name: "b", QueueDepth: 0, Healthy: false},
+	}
+
+	_, err := policy.SelectEngine(Request{}, sysmonitor.State{}, engines)
+	if err == nil {
+		t.Fatal("expected an error when every engine is unhealthy, got nil")
+	}
+}
+
 func TestThermalAwarePolicy_BehavesLikeLeastQueueWhenCool(t *testing.T) {
 	policy := &ThermalAwarePolicy{
 		Tiers:          []string{"cheap", "expensive"},
@@ -107,10 +128,10 @@ func TestThermalAwarePolicy_BehavesLikeLeastQueueWhenCool(t *testing.T) {
 		CheapTierCount: 1,
 	}
 	engines := []EngineState{
-		{Name: "cheap", QueueDepth: 3},
-		{Name: "expensive", QueueDepth: 0},
+		{Name: "cheap", QueueDepth: 3, Healthy: true},
+		{Name: "expensive", QueueDepth: 0, Healthy: true},
 	}
-	sys := sysmonitor.State{Valid: true, MaxTempC: 50} // below threshold
+	sys := sysmonitor.State{Valid: true, MaxTempC: 50}
 
 	name, err := policy.SelectEngine(Request{}, sys, engines)
 	if err != nil {
@@ -129,10 +150,10 @@ func TestThermalAwarePolicy_RestrictsToCheapTierWhenHot(t *testing.T) {
 		CheapTierCount: 1,
 	}
 	engines := []EngineState{
-		{Name: "cheap", QueueDepth: 3},
-		{Name: "expensive", QueueDepth: 0}, // would win on queue depth alone
+		{Name: "cheap", QueueDepth: 3, Healthy: true},
+		{Name: "expensive", QueueDepth: 0, Healthy: true},
 	}
-	sys := sysmonitor.State{Valid: true, MaxTempC: 65} // above threshold
+	sys := sysmonitor.State{Valid: true, MaxTempC: 65}
 
 	name, err := policy.SelectEngine(Request{}, sys, engines)
 	if err != nil {
@@ -151,10 +172,10 @@ func TestThermalAwarePolicy_IgnoresInvalidSystemState(t *testing.T) {
 		CheapTierCount: 1,
 	}
 	engines := []EngineState{
-		{Name: "cheap", QueueDepth: 3},
-		{Name: "expensive", QueueDepth: 0},
+		{Name: "cheap", QueueDepth: 3, Healthy: true},
+		{Name: "expensive", QueueDepth: 0, Healthy: true},
 	}
-	sys := sysmonitor.State{Valid: false, MaxTempC: 99} // would be "hot" if trusted
+	sys := sysmonitor.State{Valid: false, MaxTempC: 99}
 
 	name, err := policy.SelectEngine(Request{}, sys, engines)
 	if err != nil {
@@ -173,7 +194,7 @@ func TestThermalAwarePolicy_FallsBackWhenCheapTierNotRegistered(t *testing.T) {
 		CheapTierCount: 1,
 	}
 	engines := []EngineState{
-		{Name: "expensive", QueueDepth: 0}, // "cheap" is not in this list
+		{Name: "expensive", QueueDepth: 0, Healthy: true}, // "cheap" is not in this list
 	}
 	sys := sysmonitor.State{Valid: true, MaxTempC: 65}
 
@@ -194,9 +215,9 @@ func TestThermalAwarePolicy_CheapTierCountClampedToValidRange(t *testing.T) {
 		CheapTierCount: 0,
 	}
 	engines := []EngineState{
-		{Name: "cheap", QueueDepth: 0},
-		{Name: "mid", QueueDepth: 0},
-		{Name: "expensive", QueueDepth: 0},
+		{Name: "cheap", QueueDepth: 0, Healthy: true},
+		{Name: "mid", QueueDepth: 0, Healthy: true},
+		{Name: "expensive", QueueDepth: 0, Healthy: true},
 	}
 	sys := sysmonitor.State{Valid: true, MaxTempC: 65}
 
@@ -215,5 +236,39 @@ func TestThermalAwarePolicy_ErrorsOnNoEngines(t *testing.T) {
 	_, err := policy.SelectEngine(Request{}, sysmonitor.State{}, nil)
 	if err == nil {
 		t.Fatal("expected an error for an empty engine list, got nil")
+	}
+}
+
+func TestThermalAwarePolicy_ExcludesUnhealthyEngines(t *testing.T) {
+	policy := &ThermalAwarePolicy{
+		Tiers:          []string{"cheap", "expensive"},
+		TempThresholdC: 60,
+		CheapTierCount: 1,
+	}
+	engines := []EngineState{
+		{Name: "cheap", QueueDepth: 0, Healthy: false}, // the "cheap tier" itself is dead
+		{Name: "expensive", QueueDepth: 5, Healthy: true},
+	}
+	sys := sysmonitor.State{Valid: true, MaxTempC: 65} // hot, would normally restrict to "cheap"
+
+	name, err := policy.SelectEngine(Request{}, sys, engines)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if name != "expensive" {
+		t.Errorf("got %q, want %q -- the cheap tier is unhealthy, must fall back to "+
+			"the remaining healthy engine even though it's the expensive tier", name, "expensive")
+	}
+}
+
+func TestThermalAwarePolicy_ErrorsWhenAllUnhealthy(t *testing.T) {
+	policy := &ThermalAwarePolicy{Tiers: []string{"cheap"}, TempThresholdC: 60, CheapTierCount: 1}
+	engines := []EngineState{
+		{Name: "cheap", QueueDepth: 0, Healthy: false},
+	}
+
+	_, err := policy.SelectEngine(Request{}, sysmonitor.State{Valid: true, MaxTempC: 65}, engines)
+	if err == nil {
+		t.Fatal("expected an error when every engine is unhealthy, got nil")
 	}
 }
