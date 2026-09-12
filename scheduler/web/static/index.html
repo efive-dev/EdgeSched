@@ -445,10 +445,14 @@ async function pollStatus() {
     queueChart.update('none');
 
     const engineList = document.getElementById('engineList');
-    engineList.innerHTML = data.engines.map((e, i) =>
-      '<div class="engine-row"><span style="color:' + ENGINE_COLORS[i % ENGINE_COLORS.length] + '">&#9632; ' +
-      e.name + '</span><span class="engine-queue">' + e.queue_depth + '</span></div>'
-    ).join('');
+    engineList.innerHTML = data.engines.map((e, i) => {
+      const color = e.healthy ? ENGINE_COLORS[i % ENGINE_COLORS.length] : '#555';
+      const nameStyle = e.healthy ? '' : 'text-decoration:line-through;opacity:0.5;';
+      const badge = e.healthy ? '' :
+        '<span class="badge" style="background:#ff5555;color:#000;margin-left:8px;">DOWN</span>';
+      return '<div class="engine-row"><span style="color:' + color + ';' + nameStyle + '">&#9632; ' +
+        e.name + badge + '</span><span class="engine-queue">' + e.queue_depth + '</span></div>';
+    }).join('');
 
     const newNames = data.engines.map(e => e.name);
     refreshEngineSelect(document.getElementById('engineSelect'), newNames);
