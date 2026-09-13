@@ -12,10 +12,11 @@ The models are not the important part, the project focuses on  **the scheduling,
 control, observability, and failure handling around them.**
 
 <p align="center">
-  <video src="docs/img/camera.mp4" width="90%">
+  <img src="docs/img/camera.gif" width="90%">
 </p>
+
 <p align="center">
-  <video src="docs/img/no_camera.mp4" width="90%">
+  <img src="docs/img/no_camera.gif" width="90%">
 </p>
 
 ## Architecture
