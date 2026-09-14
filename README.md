@@ -59,7 +59,7 @@ One C++ process per engine tier, independent crash/restart, with a
 
 ## Results
 
-### Chapter 1–3: latency, throughput, and admission control under load
+### Latency, throughput, and admission control under load
 
 A concurrency sweep (1 -> 64 concurrent clients), each level run for a fixed,
 comparable duration:
